@@ -28,8 +28,6 @@
 
 declare(strict_types=1);
 
-namespace Vibe\AIIndex;
-
 // Prevent direct access
 if (!defined('ABSPATH')) {
     exit;
@@ -39,22 +37,102 @@ if (!defined('ABSPATH')) {
 define('VIBE_AI_VERSION', '1.0.0');
 define('VIBE_AI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('VIBE_AI_PLUGIN_URL', plugin_dir_url(__FILE__));
+define('VIBE_AI_PLUGIN_BASENAME', plugin_basename(__FILE__));
 
-// Autoloader
-require_once VIBE_AI_PLUGIN_DIR . 'vendor/autoload.php';
+/**
+ * Check PHP version requirement
+ */
+if (version_compare(PHP_VERSION, '8.1', '<')) {
+    add_action('admin_notices', function() {
+        echo '<div class="notice notice-error"><p>';
+        echo esc_html__('AI Entity Index requires PHP 8.1 or higher. Please upgrade your PHP version.', 'ai-entity-index');
+        echo '</p></div>';
+    });
+    return;
+}
 
-// Initialize plugin
+/**
+ * Check if vendor autoload exists
+ */
+$autoload_file = VIBE_AI_PLUGIN_DIR . 'vendor/autoload.php';
+if (!file_exists($autoload_file)) {
+    add_action('admin_notices', function() {
+        echo '<div class="notice notice-error"><p>';
+        echo '<strong>AI Entity Index:</strong> ';
+        echo esc_html__('Dependencies not installed. Please run "composer install" in the plugin directory, or download the production release.', 'ai-entity-index');
+        echo '</p></div>';
+    });
+    return;
+}
+
+// Load Composer autoloader
+require_once $autoload_file;
+
+/**
+ * Initialize Action Scheduler
+ * Action Scheduler is bundled via Composer
+ */
 add_action('plugins_loaded', function() {
-    // Load dependencies
-    require_once VIBE_AI_PLUGIN_DIR . 'includes/Config.php';
-    require_once VIBE_AI_PLUGIN_DIR . 'includes/Activator.php';
-    require_once VIBE_AI_PLUGIN_DIR . 'includes/Plugin.php';
+    // Action Scheduler is loaded via Composer autoload
+    // Check if it's available
+    if (!class_exists('ActionScheduler')) {
+        // Try loading from vendor path
+        $as_path = VIBE_AI_PLUGIN_DIR . 'vendor/woocommerce/action-scheduler/action-scheduler.php';
+        if (file_exists($as_path)) {
+            require_once $as_path;
+        }
+    }
+}, 1);
+
+/**
+ * Initialize the plugin
+ */
+add_action('plugins_loaded', function() {
+    // Ensure our namespace is available via autoload
+    if (!class_exists('Vibe\\AIIndex\\Plugin')) {
+        return;
+    }
 
     // Initialize main plugin class
-    $plugin = new Plugin();
+    $plugin = new Vibe\AIIndex\Plugin();
     $plugin->run();
+}, 10);
+
+/**
+ * Activation hook
+ */
+register_activation_hook(__FILE__, function() {
+    // Check dependencies
+    if (!file_exists(VIBE_AI_PLUGIN_DIR . 'vendor/autoload.php')) {
+        wp_die(
+            esc_html__('AI Entity Index requires dependencies to be installed. Please run "composer install" first.', 'ai-entity-index'),
+            esc_html__('Plugin Activation Error', 'ai-entity-index'),
+            ['back_link' => true]
+        );
+    }
+
+    require_once VIBE_AI_PLUGIN_DIR . 'vendor/autoload.php';
+
+    if (class_exists('Vibe\\AIIndex\\Activator')) {
+        Vibe\AIIndex\Activator::activate();
+    }
 });
 
-// Activation/Deactivation hooks
-register_activation_hook(__FILE__, [Activator::class, 'activate']);
-register_deactivation_hook(__FILE__, [Activator::class, 'deactivate']);
+/**
+ * Deactivation hook
+ */
+register_deactivation_hook(__FILE__, function() {
+    if (class_exists('Vibe\\AIIndex\\Activator')) {
+        Vibe\AIIndex\Activator::deactivate();
+    }
+});
+
+/**
+ * Add settings link to plugins page
+ */
+add_filter('plugin_action_links_' . VIBE_AI_PLUGIN_BASENAME, function($links) {
+    $settings_link = '<a href="' . admin_url('admin.php?page=ai-entity-index') . '">' .
+        esc_html__('Settings', 'ai-entity-index') . '</a>';
+    array_unshift($links, $settings_link);
+    return $links;
+});
