@@ -4,6 +4,9 @@
 
 # Build artifacts
 /admin/js/build/
+/build/
+/dist/
+*.zip
 
 # Environment files
 .env
