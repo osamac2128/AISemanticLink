@@ -40,14 +40,14 @@ class Config
     // AI Model Configuration
     // =================================================================
 
-    /** @var string Default AI model for entity extraction */
-    public const DEFAULT_MODEL = 'anthropic/claude-3.5-sonnet';
+    /** @var string Default AI model for entity extraction (Claude Opus 4.5 via OpenRouter) */
+    public const DEFAULT_MODEL = 'anthropic/claude-opus-4.5';
 
     /** @var string Fallback model when primary is unavailable */
-    public const FALLBACK_MODEL = 'openai/gpt-4o-mini';
+    public const FALLBACK_MODEL = 'anthropic/claude-opus-4.5';
 
     /** @var string Budget model for high-volume processing */
-    public const BUDGET_MODEL = 'anthropic/claude-3-haiku';
+    public const BUDGET_MODEL = 'anthropic/claude-opus-4.5';
 
     /** @var int Maximum tokens for AI response */
     public const MAX_TOKENS = 4096;
@@ -213,8 +213,27 @@ class Config
     // Default Post Types
     // =================================================================
 
-    /** @var array<string> Default post types to process */
-    public const DEFAULT_POST_TYPES = ['post', 'page'];
+    /** @var array<string> Default post types to process (full site coverage) */
+    public const DEFAULT_POST_TYPES = ['post', 'page', 'product', 'attachment'];
+
+    /** @var array<string> Common custom post types to auto-detect */
+    public const COMMON_POST_TYPES = [
+        'post',
+        'page',
+        'product',           // WooCommerce
+        'attachment',        // Media
+        'portfolio',         // Portfolio plugins
+        'project',           // Project management
+        'team',              // Team members
+        'testimonial',       // Testimonials
+        'service',           // Services
+        'event',             // Events
+        'course',            // LMS courses
+        'lesson',            // LMS lessons
+        'download',          // Easy Digital Downloads
+        'tribe_events',      // The Events Calendar
+        'elementor_library', // Elementor templates
+    ];
 
     // =================================================================
     // Logging Configuration
