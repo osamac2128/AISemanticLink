@@ -51,9 +51,10 @@ AI Entity Index transforms your WordPress content into a queryable knowledge gra
 = What AI models are supported? =
 
 The plugin uses OpenRouter as a model-agnostic gateway. Supported models include:
-* Anthropic Claude 3.5 Sonnet (recommended)
+* Anthropic Claude Opus 4.5 (recommended - default)
+* Anthropic Claude Sonnet 4
+* Anthropic Claude 3.5 Sonnet
 * OpenAI GPT-4o Mini
-* Anthropic Claude 3 Haiku
 
 = Is an API key required? =
 

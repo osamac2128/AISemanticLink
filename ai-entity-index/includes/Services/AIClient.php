@@ -24,9 +24,9 @@ class AIClient
     private const API_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
     /**
-     * Default model to use for extraction.
+     * Default model to use for extraction (Claude Opus 4.5 via OpenRouter).
      */
-    private const DEFAULT_MODEL = 'anthropic/claude-3.5-sonnet';
+    private const DEFAULT_MODEL = 'anthropic/claude-opus-4.5';
 
     /**
      * Rate limiting: requests per minute.

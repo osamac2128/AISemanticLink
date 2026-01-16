@@ -15,7 +15,7 @@ const DEFAULT_POST_TYPES = [
   { name: 'post', label: 'Posts', description: 'Standard blog posts' },
   { name: 'page', label: 'Pages', description: 'Static pages' },
   { name: 'product', label: 'Products', description: 'WooCommerce products' },
-  { name: 'article', label: 'Articles', description: 'Custom article type' },
+  { name: 'attachment', label: 'Media', description: 'Media library attachments' },
 ];
 
 /**
@@ -23,8 +23,8 @@ const DEFAULT_POST_TYPES = [
  */
 const DEFAULT_SETTINGS = {
   enabled: true,
-  post_types: ['post', 'page'],
-  embedding_model: 'text-embedding-3-small',
+  post_types: ['post', 'page', 'product', 'attachment'],
+  embedding_model: 'openai/text-embedding-3-small',
   chunk_target_tokens: 450,
   chunk_overlap_tokens: 60,
   batch_size: 25,
@@ -309,11 +309,11 @@ export default function KBSettings({ vibeAiData }) {
               type="text"
               value={formData.embedding_model}
               onChange={(e) => handleChange('embedding_model', e.target.value)}
-              placeholder="text-embedding-3-small"
+              placeholder="openai/text-embedding-3-small"
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
             <p className="mt-1 text-xs text-gray-500">
-              OpenAI embedding model to use (e.g., text-embedding-3-small, text-embedding-3-large)
+              OpenRouter embedding model (e.g., openai/text-embedding-3-small, openai/text-embedding-3-large)
             </p>
           </div>
         </section>

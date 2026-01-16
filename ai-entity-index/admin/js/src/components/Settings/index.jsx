@@ -11,25 +11,25 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-// Available AI models
+// Available AI models (via OpenRouter)
 const AI_MODELS = [
     {
-        value: 'anthropic/claude-3.5-sonnet',
-        label: 'Claude 3.5 Sonnet',
-        description: 'Accuracy-first extraction (Premium)',
+        value: 'anthropic/claude-opus-4.5',
+        label: 'Claude Opus 4.5',
+        description: 'Most capable model - highest accuracy (Recommended)',
         tier: 'premium',
     },
     {
-        value: 'openai/gpt-4o-mini',
-        label: 'GPT-4o Mini',
-        description: 'Speed/cost optimization (Standard)',
+        value: 'anthropic/claude-sonnet-4',
+        label: 'Claude Sonnet 4',
+        description: 'Fast and intelligent (Standard)',
         tier: 'standard',
     },
     {
-        value: 'anthropic/claude-3-haiku',
-        label: 'Claude 3 Haiku',
-        description: 'High-volume, lower accuracy (Budget)',
-        tier: 'budget',
+        value: 'anthropic/claude-3.5-sonnet',
+        label: 'Claude 3.5 Sonnet',
+        description: 'Previous generation (Legacy)',
+        tier: 'standard',
     },
 ];
 
@@ -159,10 +159,10 @@ export default function Settings() {
     useEffect(() => {
         if (settings) {
             setFormData({
-                ai_model: settings.ai_model || 'anthropic/claude-3.5-sonnet',
+                ai_model: settings.ai_model || 'anthropic/claude-opus-4.5',
                 batch_size: settings.batch_size || 25,
                 confidence_threshold: settings.confidence_threshold || 0.6,
-                post_types: settings.post_types || ['post', 'page'],
+                post_types: settings.post_types || ['post', 'page', 'product', 'attachment'],
             });
             setHasChanges(false);
         }
