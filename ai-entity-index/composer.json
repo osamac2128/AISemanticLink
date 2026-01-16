@@ -1,0 +1,40 @@
+{
+    "name": "vibe/ai-entity-index",
+    "description": "Semantic Truth Layer for WordPress - Extract, normalize, and link named entities with Schema.org JSON-LD output",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Vibe Architect",
+            "email": "architect@vibe.dev"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "wpackagist-plugin/action-scheduler": "^3.7"
+    },
+    "autoload": {
+        "psr-4": {
+            "Vibe\\AIIndex\\": "includes/"
+        }
+    },
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://wpackagist.org"
+        }
+    ],
+    "config": {
+        "allow-plugins": {
+            "composer/installers": true
+        },
+        "optimize-autoloader": true
+    },
+    "extra": {
+        "installer-paths": {
+            "vendor/{$vendor}/{$name}": [
+                "type:wordpress-plugin"
+            ]
+        }
+    }
+}
