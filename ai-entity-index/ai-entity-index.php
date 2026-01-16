@@ -1,10 +1,29 @@
 <?php
 /**
  * Plugin Name: AI Entity Index
+ * Plugin URI: https://vibeai.dev/ai-entity-index
  * Description: Semantic Truth Layer for WordPress - Extract, normalize, and link named entities with Schema.org JSON-LD output
  * Version: 1.0.0
  * Requires PHP: 8.1
+ * Requires at least: 6.0
  * Author: Vibe Architect
+ * Author URI: https://vibeai.dev
+ * License: Proprietary
+ * License URI: LICENSE
+ * Text Domain: ai-entity-index
+ * Domain Path: /languages
+ *
+ * @package Vibe\AIIndex
+ * @copyright 2026 Vibe Architect. All Rights Reserved.
+ *
+ * PROPRIETARY SOFTWARE - ALL RIGHTS RESERVED
+ *
+ * This software is the confidential and proprietary property of Vibe Architect.
+ * Unauthorized copying, modification, distribution, or use of this software,
+ * via any medium, is strictly prohibited without the express written consent
+ * of Vibe Architect.
+ *
+ * See LICENSE file for full license terms.
  */
 
 declare(strict_types=1);

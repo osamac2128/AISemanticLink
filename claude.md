@@ -6,6 +6,21 @@
 
 **Plugin Directory:** `/home/user/AISemanticLink/ai-entity-index/`
 
+## License
+
+**PROPRIETARY SOFTWARE - ALL RIGHTS RESERVED**
+
+Copyright (c) 2026 Vibe Architect. All Rights Reserved.
+
+This software is licensed under a proprietary license that:
+- **PROHIBITS** copying, reproducing, or duplicating the software
+- **PROHIBITS** modifying, adapting, or creating derivative works
+- **PROHIBITS** distributing, sublicensing, or transferring to third parties
+- **PROHIBITS** reverse engineering or decompiling
+- **PROHIBITS** sharing code in public repositories
+
+See the `LICENSE` file for complete terms.
+
 ## Tech Stack
 
 | Layer | Technology | Version |

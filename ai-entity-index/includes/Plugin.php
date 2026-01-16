@@ -195,7 +195,7 @@ class Plugin
             wp_die(__('You do not have sufficient permissions to access this page.', $this->textDomain));
         }
 
-        echo '<div id="vibe-ai-admin-root" class="wrap"></div>';
+        echo '<div id="vibe-ai-admin" class="wrap"></div>';
     }
 
     /**
@@ -233,12 +233,13 @@ class Plugin
         );
 
         // Localize script with necessary data
-        wp_localize_script('vibe-ai-admin', 'vibeAiConfig', [
+        wp_localize_script('vibe-ai-admin', 'vibeAiData', [
             'apiUrl' => rest_url(Config::REST_NAMESPACE),
             'nonce' => wp_create_nonce('wp_rest'),
             'version' => $this->version,
             'pollingInterval' => Config::POLLING_INTERVAL_MS,
             'adminUrl' => admin_url('admin.php?page=vibe-ai-index'),
+            'pluginUrl' => VIBE_AI_PLUGIN_URL,
         ]);
     }
 
