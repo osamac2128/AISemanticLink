@@ -8,20 +8,13 @@
  * Requires at least: 6.0
  * Author: Vibe Architect
  * Author URI: https://vibeai.dev
- * License: Proprietary
- * License URI: LICENSE
+ * License: GPLv2 or later
+ * License URI: http://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: ai-entity-index
  * Domain Path: /languages
  *
  * @package Vibe\AIIndex
  * @copyright 2026 Vibe Architect. All Rights Reserved.
- *
- * PROPRIETARY SOFTWARE - ALL RIGHTS RESERVED
- *
- * This software is the confidential and proprietary property of Vibe Architect.
- * Unauthorized copying, modification, distribution, or use of this software,
- * via any medium, is strictly prohibited without the express written consent
- * of Vibe Architect.
  *
  * See LICENSE file for full license terms.
  */
@@ -51,17 +44,20 @@ if (version_compare(PHP_VERSION, '8.1', '<')) {
     return;
 }
 
-/**
  * Check if vendor autoload exists
  */
 $autoload_file = VIBE_AI_PLUGIN_DIR . 'vendor/autoload.php';
 if (!file_exists($autoload_file)) {
     add_action('admin_notices', function() {
+        if (!current_user_can('activate_plugins')) {
+            return;
+        }
         echo '<div class="notice notice-error"><p>';
         echo '<strong>AI Entity Index:</strong> ';
-        echo esc_html__('Dependencies not installed. Please run "composer install" in the plugin directory, or download the production release.', 'ai-entity-index');
+        echo esc_html__('Dependencies not installed. The "vendor" directory is missing. If you installed this from source, please run "composer install".', 'ai-entity-index');
         echo '</p></div>';
     });
+    // Stop execution to prevent fatal errors
     return;
 }
 

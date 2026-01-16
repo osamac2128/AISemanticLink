@@ -14,7 +14,8 @@ namespace Vibe\AIIndex\Repositories;
  * @package Vibe\AIIndex\Repositories
  * @since 1.0.0
  */
-class EntityRepository {
+class EntityRepository
+{
 
     /**
      * WordPress database instance.
@@ -47,12 +48,13 @@ class EntityRepository {
     /**
      * Initialize the repository with database connection.
      */
-    public function __construct() {
+    public function __construct()
+    {
         global $wpdb;
-        $this->wpdb           = $wpdb;
+        $this->wpdb = $wpdb;
         $this->entities_table = $wpdb->prefix . 'ai_entities';
         $this->mentions_table = $wpdb->prefix . 'ai_mentions';
-        $this->aliases_table  = $wpdb->prefix . 'ai_aliases';
+        $this->aliases_table = $wpdb->prefix . 'ai_aliases';
     }
 
     /**
@@ -67,13 +69,14 @@ class EntityRepository {
      *
      * @return int The Entity ID.
      */
-    public function upsert_entity( string $name, string $type, array $aliases = [] ): int {
-        $clean_name = sanitize_text_field( $name );
-        $slug       = sanitize_title( $clean_name );
+    public function upsert_entity(string $name, string $type, array $aliases = []): int
+    {
+        $clean_name = sanitize_text_field($name);
+        $slug = sanitize_title($clean_name);
 
         // 1. Check if any alias resolves to existing canonical.
-        $canonical_id = $this->resolve_alias( $slug );
-        if ( $canonical_id ) {
+        $canonical_id = $this->resolve_alias($slug);
+        if ($canonical_id) {
             return $canonical_id;
         }
 
@@ -85,7 +88,7 @@ class EntityRepository {
             )
         );
 
-        if ( $existing_id ) {
+        if ($existing_id) {
             return (int) $existing_id;
         }
 
@@ -97,15 +100,15 @@ class EntityRepository {
                  ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)",
                 $clean_name,
                 $slug,
-                strtoupper( sanitize_text_field( $type ) )
+                strtoupper(sanitize_text_field($type))
             )
         );
 
         $entity_id = (int) $this->wpdb->insert_id;
 
         // 4. Register aliases.
-        foreach ( $aliases as $alias ) {
-            $this->register_alias( $entity_id, $alias );
+        foreach ($aliases as $alias) {
+            $this->register_alias($entity_id, $alias);
         }
 
         return $entity_id;
@@ -118,11 +121,12 @@ class EntityRepository {
      *
      * @return int|null The canonical entity ID or null if not found.
      */
-    public function resolve_alias( string $alias_slug ): ?int {
+    public function resolve_alias(string $alias_slug): ?int
+    {
         $result = $this->wpdb->get_var(
             $this->wpdb->prepare(
                 "SELECT canonical_id FROM {$this->aliases_table} WHERE alias_slug = %s",
-                sanitize_title( $alias_slug )
+                sanitize_title($alias_slug)
             )
         );
 
@@ -139,12 +143,13 @@ class EntityRepository {
      *
      * @return void
      */
-    public function register_alias( int $canonical_id, string $alias ): void {
-        $clean_alias = sanitize_text_field( $alias );
-        $alias_slug  = sanitize_title( $clean_alias );
+    public function register_alias(int $canonical_id, string $alias): void
+    {
+        $clean_alias = sanitize_text_field($alias);
+        $alias_slug = sanitize_title($clean_alias);
 
         // Skip empty aliases.
-        if ( empty( $alias_slug ) ) {
+        if (empty($alias_slug)) {
             return;
         }
 
@@ -181,30 +186,40 @@ class EntityRepository {
         bool $is_primary = false
     ): void {
         // Sanitize and truncate context to 500 characters.
-        $clean_context = wp_kses_post( mb_substr( $context, 0, 500 ) );
+        $clean_context = wp_kses_post(mb_substr($context, 0, 500));
 
         // Clamp confidence to valid range.
-        $confidence = max( 0.0, min( 1.0, $confidence ) );
+        $confidence = max(0.0, min(1.0, $confidence));
 
-        $this->wpdb->query(
-            $this->wpdb->prepare(
-                "INSERT INTO {$this->mentions_table}
-                    (entity_id, post_id, confidence, context_snippet, is_primary)
-                 VALUES (%d, %d, %f, %s, %d)
-                 ON DUPLICATE KEY UPDATE
-                    confidence = GREATEST(confidence, VALUES(confidence)),
-                    context_snippet = IF(VALUES(confidence) > confidence, VALUES(context_snippet), context_snippet),
-                    is_primary = VALUES(is_primary)",
-                $entity_id,
-                $post_id,
-                $confidence,
-                $clean_context,
-                $is_primary ? 1 : 0
-            )
-        );
+        // Start Transaction
+        $this->wpdb->query('START TRANSACTION');
 
-        // Update mention count on entity.
-        $this->update_mention_count( $entity_id );
+        try {
+            $this->wpdb->query(
+                $this->wpdb->prepare(
+                    "INSERT INTO {$this->mentions_table}
+                        (entity_id, post_id, confidence, context_snippet, is_primary)
+                     VALUES (%d, %d, %f, %s, %d)
+                     ON DUPLICATE KEY UPDATE
+                        confidence = GREATEST(confidence, VALUES(confidence)),
+                        context_snippet = IF(VALUES(confidence) > confidence, VALUES(context_snippet), context_snippet),
+                        is_primary = VALUES(is_primary)",
+                    $entity_id,
+                    $post_id,
+                    $confidence,
+                    $clean_context,
+                    $is_primary ? 1 : 0
+                )
+            );
+
+            // Update mention count on entity.
+            $this->update_mention_count($entity_id);
+
+            $this->wpdb->query('COMMIT');
+        } catch (\Exception $e) {
+            $this->wpdb->query('ROLLBACK');
+            throw $e;
+        }
     }
 
     /**
@@ -214,7 +229,8 @@ class EntityRepository {
      *
      * @return void
      */
-    private function update_mention_count( int $entity_id ): void {
+    private function update_mention_count(int $entity_id): void
+    {
         $this->wpdb->query(
             $this->wpdb->prepare(
                 "UPDATE {$this->entities_table}
@@ -239,7 +255,8 @@ class EntityRepository {
      *
      * @return array Array of entity objects with mention data.
      */
-    public function get_entities_for_post( int $post_id, float $min_confidence = 0.6 ): array {
+    public function get_entities_for_post(int $post_id, float $min_confidence = 0.6): array
+    {
         $results = $this->wpdb->get_results(
             $this->wpdb->prepare(
                 "SELECT
@@ -279,14 +296,15 @@ class EntityRepository {
      *
      * @return array Array of affected post IDs requiring Schema regeneration.
      */
-    public function merge_entities( int $target_id, array $source_ids ): array {
+    public function merge_entities(int $target_id, array $source_ids): array
+    {
         $affected_posts = [];
 
-        foreach ( $source_ids as $source_id ) {
+        foreach ($source_ids as $source_id) {
             $source_id = (int) $source_id;
 
             // Skip if trying to merge entity into itself.
-            if ( $source_id === $target_id ) {
+            if ($source_id === $target_id) {
                 continue;
             }
 
@@ -297,7 +315,7 @@ class EntityRepository {
                     $source_id
                 )
             );
-            $affected_posts = array_merge( $affected_posts, $posts );
+            $affected_posts = array_merge($affected_posts, $posts);
 
             // Transfer mentions (update or skip if duplicate due to UNIQUE KEY).
             $this->wpdb->query(
@@ -337,22 +355,22 @@ class EntityRepository {
                 )
             );
 
-            if ( $source_name ) {
-                $this->register_alias( $target_id, $source_name );
+            if ($source_name) {
+                $this->register_alias($target_id, $source_name);
             }
 
             // Delete source entity (cascades remaining aliases due to FK).
             $this->wpdb->delete(
                 $this->entities_table,
-                [ 'id' => $source_id ],
-                [ '%d' ]
+                ['id' => $source_id],
+                ['%d']
             );
         }
 
         // Update target mention count.
-        $this->update_mention_count( $target_id );
+        $this->update_mention_count($target_id);
 
-        return array_unique( array_map( 'intval', $affected_posts ) );
+        return array_unique(array_map('intval', $affected_posts));
     }
 
     /**
@@ -362,7 +380,8 @@ class EntityRepository {
      *
      * @return object|null The entity object or null if not found.
      */
-    public function get_entity( int $id ): ?object {
+    public function get_entity(int $id): ?object
+    {
         $result = $this->wpdb->get_row(
             $this->wpdb->prepare(
                 "SELECT
@@ -410,61 +429,62 @@ class EntityRepository {
      *     @type int   $per_page   Items per page.
      * }
      */
-    public function get_entities( array $args = [] ): array {
+    public function get_entities(array $args = []): array
+    {
         $defaults = [
-            'page'     => 1,
+            'page' => 1,
             'per_page' => 20,
-            'type'     => '',
-            'status'   => '',
-            'search'   => '',
-            'orderby'  => 'created_at',
-            'order'    => 'DESC',
+            'type' => '',
+            'status' => '',
+            'search' => '',
+            'orderby' => 'created_at',
+            'order' => 'DESC',
         ];
 
-        $args = wp_parse_args( $args, $defaults );
+        $args = wp_parse_args($args, $defaults);
 
         // Sanitize and validate arguments.
-        $page     = max( 1, (int) $args['page'] );
-        $per_page = max( 1, min( 100, (int) $args['per_page'] ) );
-        $offset   = ( $page - 1 ) * $per_page;
+        $page = max(1, (int) $args['page']);
+        $per_page = max(1, min(100, (int) $args['per_page']));
+        $offset = ($page - 1) * $per_page;
 
         // Build WHERE clauses.
         $where_clauses = [];
-        $where_values  = [];
+        $where_values = [];
 
-        if ( ! empty( $args['type'] ) ) {
+        if (!empty($args['type'])) {
             $where_clauses[] = 'type = %s';
-            $where_values[]  = strtoupper( sanitize_text_field( $args['type'] ) );
+            $where_values[] = strtoupper(sanitize_text_field($args['type']));
         }
 
-        if ( ! empty( $args['status'] ) ) {
+        if (!empty($args['status'])) {
             $where_clauses[] = 'status = %s';
-            $where_values[]  = sanitize_text_field( $args['status'] );
+            $where_values[] = sanitize_text_field($args['status']);
         }
 
-        if ( ! empty( $args['search'] ) ) {
+        if (!empty($args['search'])) {
             $where_clauses[] = 'name LIKE %s';
-            $where_values[]  = '%' . $this->wpdb->esc_like( sanitize_text_field( $args['search'] ) ) . '%';
+            $where_values[] = '%' . $this->wpdb->esc_like(sanitize_text_field($args['search'])) . '%';
         }
 
         $where_sql = '';
-        if ( ! empty( $where_clauses ) ) {
-            $where_sql = 'WHERE ' . implode( ' AND ', $where_clauses );
+        if (!empty($where_clauses)) {
+            $where_sql = 'WHERE ' . implode(' AND ', $where_clauses);
         }
 
         // Validate orderby column (whitelist approach for security).
-        $allowed_orderby = [ 'id', 'name', 'type', 'status', 'mention_count', 'created_at', 'updated_at' ];
-        $orderby         = in_array( $args['orderby'], $allowed_orderby, true ) ? $args['orderby'] : 'created_at';
+        $allowed_orderby = ['id', 'name', 'type', 'status', 'mention_count', 'created_at', 'updated_at'];
+        $orderby = in_array($args['orderby'], $allowed_orderby, true) ? $args['orderby'] : 'created_at';
 
         // Validate order direction.
-        $order = strtoupper( $args['order'] ) === 'ASC' ? 'ASC' : 'DESC';
+        $order = strtoupper($args['order']) === 'ASC' ? 'ASC' : 'DESC';
 
         // Get total count.
         $count_query = "SELECT COUNT(*) FROM {$this->entities_table} {$where_sql}";
-        if ( ! empty( $where_values ) ) {
-            $count_query = $this->wpdb->prepare( $count_query, ...$where_values );
+        if (!empty($where_values)) {
+            $count_query = $this->wpdb->prepare($count_query, ...$where_values);
         }
-        $total = (int) $this->wpdb->get_var( $count_query );
+        $total = (int) $this->wpdb->get_var($count_query);
 
         // Get items.
         $items_query = "SELECT
@@ -485,15 +505,15 @@ class EntityRepository {
          ORDER BY {$orderby} {$order}
          LIMIT %d OFFSET %d";
 
-        $query_values   = array_merge( $where_values, [ $per_page, $offset ] );
-        $prepared_query = $this->wpdb->prepare( $items_query, ...$query_values );
-        $items          = $this->wpdb->get_results( $prepared_query );
+        $query_values = array_merge($where_values, [$per_page, $offset]);
+        $prepared_query = $this->wpdb->prepare($items_query, ...$query_values);
+        $items = $this->wpdb->get_results($prepared_query);
 
         return [
-            'items'    => $items ?: [],
-            'total'    => $total,
-            'pages'    => (int) ceil( $total / $per_page ),
-            'page'     => $page,
+            'items' => $items ?: [],
+            'total' => $total,
+            'pages' => (int) ceil($total / $per_page),
+            'page' => $page,
             'per_page' => $per_page,
         ];
     }
@@ -506,7 +526,8 @@ class EntityRepository {
      *
      * @return bool True on success, false on failure.
      */
-    public function update_entity( int $id, array $data ): bool {
+    public function update_entity(int $id, array $data): bool
+    {
         // Whitelist of allowed fields.
         $allowed_fields = [
             'name',
@@ -518,66 +539,66 @@ class EntityRepository {
             'status',
         ];
 
-        $update_data   = [];
+        $update_data = [];
         $update_format = [];
 
-        foreach ( $allowed_fields as $field ) {
-            if ( ! array_key_exists( $field, $data ) ) {
+        foreach ($allowed_fields as $field) {
+            if (!array_key_exists($field, $data)) {
                 continue;
             }
 
-            $value = $data[ $field ];
+            $value = $data[$field];
 
-            switch ( $field ) {
+            switch ($field) {
                 case 'name':
-                    $update_data['name'] = sanitize_text_field( $value );
-                    $update_data['slug'] = sanitize_title( $update_data['name'] );
-                    $update_format[]     = '%s';
-                    $update_format[]     = '%s';
+                    $update_data['name'] = sanitize_text_field($value);
+                    $update_data['slug'] = sanitize_title($update_data['name']);
+                    $update_format[] = '%s';
+                    $update_format[] = '%s';
                     break;
 
                 case 'type':
-                    $update_data['type'] = strtoupper( sanitize_text_field( $value ) );
-                    $update_format[]     = '%s';
+                    $update_data['type'] = strtoupper(sanitize_text_field($value));
+                    $update_format[] = '%s';
                     break;
 
                 case 'schema_type':
                 case 'status':
-                    $update_data[ $field ] = sanitize_text_field( $value );
-                    $update_format[]       = '%s';
+                    $update_data[$field] = sanitize_text_field($value);
+                    $update_format[] = '%s';
                     break;
 
                 case 'description':
-                    $update_data['description'] = wp_kses_post( $value );
-                    $update_format[]            = '%s';
+                    $update_data['description'] = wp_kses_post($value);
+                    $update_format[] = '%s';
                     break;
 
                 case 'same_as_url':
-                    $update_data['same_as_url'] = esc_url_raw( $value );
-                    $update_format[]            = '%s';
+                    $update_data['same_as_url'] = esc_url_raw($value);
+                    $update_format[] = '%s';
                     break;
 
                 case 'wikidata_id':
                     // Validate Wikidata ID format (Q followed by digits).
-                    $wikidata_id = sanitize_text_field( $value );
-                    if ( empty( $wikidata_id ) || preg_match( '/^Q[0-9]+$/', $wikidata_id ) ) {
+                    $wikidata_id = sanitize_text_field($value);
+                    if (empty($wikidata_id) || preg_match('/^Q[0-9]+$/', $wikidata_id)) {
                         $update_data['wikidata_id'] = $wikidata_id ?: null;
-                        $update_format[]            = '%s';
+                        $update_format[] = '%s';
                     }
                     break;
             }
         }
 
-        if ( empty( $update_data ) ) {
+        if (empty($update_data)) {
             return false;
         }
 
         $result = $this->wpdb->update(
             $this->entities_table,
             $update_data,
-            [ 'id' => $id ],
+            ['id' => $id],
             $update_format,
-            [ '%d' ]
+            ['%d']
         );
 
         return $result !== false;
@@ -593,11 +614,12 @@ class EntityRepository {
      *
      * @return bool True on success, false on failure.
      */
-    public function delete_entity( int $id ): bool {
+    public function delete_entity(int $id): bool
+    {
         $result = $this->wpdb->delete(
             $this->entities_table,
-            [ 'id' => $id ],
-            [ '%d' ]
+            ['id' => $id],
+            ['%d']
         );
 
         return $result !== false;
@@ -610,7 +632,8 @@ class EntityRepository {
      *
      * @return array Array of alias objects.
      */
-    public function get_aliases_for_entity( int $entity_id ): array {
+    public function get_aliases_for_entity(int $entity_id): array
+    {
         $results = $this->wpdb->get_results(
             $this->wpdb->prepare(
                 "SELECT
@@ -636,7 +659,8 @@ class EntityRepository {
      *
      * @return array Array of mention objects with post data.
      */
-    public function get_mentions_for_entity( int $entity_id ): array {
+    public function get_mentions_for_entity(int $entity_id): array
+    {
         $results = $this->wpdb->get_results(
             $this->wpdb->prepare(
                 "SELECT
@@ -668,7 +692,8 @@ class EntityRepository {
      *     @type float $avg_confidence  Average confidence score across all mentions.
      * }
      */
-    public function get_stats(): array {
+    public function get_stats(): array
+    {
         // Get total entities.
         $total_entities = (int) $this->wpdb->get_var(
             "SELECT COUNT(*) FROM {$this->entities_table}"
@@ -684,8 +709,8 @@ class EntityRepository {
 
         return [
             'total_entities' => $total_entities,
-            'total_mentions' => (int) ( $mention_stats->total_mentions ?? 0 ),
-            'avg_confidence' => round( (float) ( $mention_stats->avg_confidence ?? 0 ), 3 ),
+            'total_mentions' => (int) ($mention_stats->total_mentions ?? 0),
+            'avg_confidence' => round((float) ($mention_stats->avg_confidence ?? 0), 3),
         ];
     }
 
@@ -696,11 +721,12 @@ class EntityRepository {
      *
      * @return bool True on success, false on failure.
      */
-    public function delete_alias( int $alias_id ): bool {
+    public function delete_alias(int $alias_id): bool
+    {
         $result = $this->wpdb->delete(
             $this->aliases_table,
-            [ 'id' => $alias_id ],
-            [ '%d' ]
+            ['id' => $alias_id],
+            ['%d']
         );
 
         return $result !== false;

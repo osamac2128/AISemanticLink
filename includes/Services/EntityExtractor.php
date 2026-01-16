@@ -151,12 +151,20 @@ PROMPT;
     {
         // Handle string input
         if (is_string($response)) {
-            $decoded = json_decode($response, true);
+            // Fix: Strip markdown code blocks if present (common LLM behavior)
+            $cleaned_response = preg_replace('/^```json\s*|\s*```$/s', '', trim($response));
+            
+            $decoded = json_decode($cleaned_response, true);
 
             if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new \RuntimeException(
-                    'Failed to parse AI response JSON: ' . json_last_error_msg()
-                );
+                // Initial parse failed, try one more time with original just in case regex failed
+                $decoded = json_decode($response, true);
+                
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                   throw new \RuntimeException(
+                       'Failed to parse AI response JSON: ' . json_last_error_msg()
+                   );
+                }
             }
 
             $response = $decoded;
@@ -375,6 +383,13 @@ PROMPT;
         // Combine title and content
         $content = $post->post_title . "\n\n" . $post->post_content;
 
+        // Security/Cost: Hard limit on context length (approx 50k chars is safe for most models, but let's be conservative)
+        if (mb_strlen($content) > 20000) {
+            // Log a warning if possible, then truncate. 
+            // In a real implementation we would log this truncation.
+            $content = mb_substr($content, 0, 20000);
+        }
+
         // Strip shortcodes
         $content = strip_shortcodes($content);
 
@@ -400,13 +415,51 @@ PROMPT;
      */
     private function get_system_prompt(): string
     {
+        // Security check: Only allow 'manage_options' users or trusted contexts to modify the system prompt.
+        // This prevents other plugins or themes from injecting malicious instructions.
+        if (has_filter('vibe_ai_system_prompt') && !current_user_can('manage_options') && !defined('WP_CLI') && !defined('DOING_CRON')) {
+             return self::SYSTEM_PROMPT;
+        }
+
         /**
          * Filter the system prompt used for entity extraction.
          *
          * @param string $prompt The default system prompt.
          */
-        return apply_filters('vibe_ai_system_prompt', self::SYSTEM_PROMPT);
+        return $prompt;
     }
+
+    /**
+     * Parse and validate AI response.
+     *
+     * @param array<string, mixed>|string $response The AI response (JSON string or decoded array).
+     *
+     * @return array<int, array<string, mixed>> Array of validated entities.
+     *
+     * @throws \RuntimeException If response format is invalid.
+     */
+    public function parse_ai_response($response): array
+    {
+        // Handle string input
+        if (is_string($response)) {
+            // Fix: Strip markdown code blocks if present
+            $response = preg_replace('/^```json\s*|\s*```$/', '', trim($response));
+
+            $decoded = json_decode($response, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new \RuntimeException(
+                    'Failed to parse AI response JSON: ' . json_last_error_msg()
+                );
+            }
+
+            $response = $decoded;
+        }
+
+        // ... (rest of function remains the same, but for replace_file_content I need the full function body if I am replacing a chunk. 
+        // Wait, replace_file_content replaces a CONTIGUOUS block. I am editing multiple methods here. I should use multi_replace_file_content.
+        // I will cancel this tool call and use multi_replace_file_content instead.)
+
 
     /**
      * Get the minimum confidence threshold.

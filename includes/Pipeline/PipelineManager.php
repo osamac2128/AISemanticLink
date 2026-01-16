@@ -19,7 +19,8 @@ use Vibe\AIIndex\Jobs\SchemaBuildJob;
  *
  * @package Vibe\AIIndex\Pipeline
  */
-class PipelineManager {
+class PipelineManager
+{
 
     /**
      * Pipeline status option key.
@@ -62,12 +63,12 @@ class PipelineManager {
      * Phase job class mappings.
      */
     private const PHASE_JOBS = [
-        'preparation'    => PreparationJob::class,
-        'extraction'     => ExtractionJob::class,
-        'deduplication'  => DeduplicationJob::class,
-        'linking'        => LinkingJob::class,
-        'indexing'       => IndexingJob::class,
-        'schema_build'   => SchemaBuildJob::class,
+        'preparation' => PreparationJob::class,
+        'extraction' => ExtractionJob::class,
+        'deduplication' => DeduplicationJob::class,
+        'linking' => LinkingJob::class,
+        'indexing' => IndexingJob::class,
+        'schema_build' => SchemaBuildJob::class,
     ];
 
     /**
@@ -87,7 +88,8 @@ class PipelineManager {
      *
      * @return self
      */
-    public static function get_instance(): self {
+    public static function get_instance(): self
+    {
         if (self::$instance === null) {
             self::$instance = new self();
         }
@@ -97,7 +99,8 @@ class PipelineManager {
     /**
      * Private constructor for singleton pattern.
      */
-    private function __construct() {
+    private function __construct()
+    {
         $this->register_hooks();
     }
 
@@ -106,7 +109,8 @@ class PipelineManager {
      *
      * @return void
      */
-    private function register_hooks(): void {
+    private function register_hooks(): void
+    {
         // Listen for phase completion events
         add_action('vibe_ai_phase_preparation_complete', [$this, 'handle_phase_complete']);
         add_action('vibe_ai_phase_extraction_complete', [$this, 'handle_phase_complete']);
@@ -126,7 +130,8 @@ class PipelineManager {
      * @return void
      * @throws \RuntimeException If pipeline is already running.
      */
-    public function start(array $options = []): void {
+    public function start(array $options = []): void
+    {
         if ($this->is_running()) {
             throw new \RuntimeException('Pipeline is already running. Stop it first before starting a new run.');
         }
@@ -136,11 +141,11 @@ class PipelineManager {
 
         // Merge options with defaults
         $config = wp_parse_args($options, [
-            'post_types'       => $default_post_types,
-            'batch_size'       => 5,
-            'force_reprocess'  => false,
-            'started_at'       => current_time('mysql', true),
-            'started_by'       => get_current_user_id(),
+            'post_types' => $default_post_types,
+            'batch_size' => 5,
+            'force_reprocess' => false,
+            'started_at' => current_time('mysql', true),
+            'started_by' => get_current_user_id(),
         ]);
 
         // Store configuration
@@ -171,7 +176,8 @@ class PipelineManager {
      *
      * @return void
      */
-    public function stop(): void {
+    public function stop(): void
+    {
         // Cancel all scheduled pipeline jobs
         foreach (self::PHASE_JOBS as $phase => $job_class) {
             $hook = "vibe_ai_phase_{$phase}";
@@ -188,7 +194,7 @@ class PipelineManager {
         // Log pipeline stop
         $this->log('info', 'Pipeline stopped', [
             'previous_status' => $previous_status,
-            'previous_phase'  => $previous_phase,
+            'previous_phase' => $previous_phase,
         ]);
 
         // Fire pipeline stopped action
@@ -200,7 +206,8 @@ class PipelineManager {
      *
      * @return array Pipeline status information.
      */
-    public function get_status(): array {
+    public function get_status(): array
+    {
         $status = get_option(self::OPTION_STATUS, 'idle');
         $phase = get_option(self::OPTION_PHASE, '');
         $progress = $this->get_progress();
@@ -214,14 +221,14 @@ class PipelineManager {
         $propagating_entities = $this->get_propagating_entities();
 
         return [
-            'status'               => $status,
-            'current_phase'        => $phase,
-            'phase_number'         => $this->get_phase_number($phase),
-            'total_phases'         => count(self::PHASES),
-            'progress'             => $progress,
-            'stats'                => $stats,
-            'config'               => $config,
-            'last_activity'        => $last_activity,
+            'status' => $status,
+            'current_phase' => $phase,
+            'phase_number' => $this->get_phase_number($phase),
+            'total_phases' => count(self::PHASES),
+            'progress' => $progress,
+            'stats' => $stats,
+            'config' => $config,
+            'last_activity' => $last_activity,
             'propagating_entities' => $propagating_entities,
         ];
     }
@@ -231,7 +238,8 @@ class PipelineManager {
      *
      * @return void
      */
-    public function advance_phase(): void {
+    public function advance_phase(): void
+    {
         $current_phase = get_option(self::OPTION_PHASE, '');
         $current_number = $this->get_phase_number($current_phase);
 
@@ -260,7 +268,7 @@ class PipelineManager {
         // Log phase transition
         $this->log('info', 'Phase advanced', [
             'from_phase' => $current_phase,
-            'to_phase'   => $next_phase,
+            'to_phase' => $next_phase,
         ]);
 
         // Fire phase change action
@@ -276,7 +284,8 @@ class PipelineManager {
      *
      * @return bool True if running.
      */
-    public function is_running(): bool {
+    public function is_running(): bool
+    {
         $status = get_option(self::OPTION_STATUS, 'idle');
         return $status === 'running';
     }
@@ -286,25 +295,26 @@ class PipelineManager {
      *
      * @return array Progress data.
      */
-    public function get_progress(): array {
+    public function get_progress(): array
+    {
         $progress = get_option(self::OPTION_PROGRESS, []);
 
         return wp_parse_args($progress, [
-            'total'      => 0,
-            'completed'  => 0,
-            'failed'     => 0,
-            'skipped'    => 0,
+            'total' => 0,
+            'completed' => 0,
+            'failed' => 0,
+            'skipped' => 0,
             'percentage' => 0,
-            'phase'      => [
-                'total'      => 0,
-                'completed'  => 0,
-                'failed'     => 0,
+            'phase' => [
+                'total' => 0,
+                'completed' => 0,
+                'failed' => 0,
                 'percentage' => 0,
             ],
-            'eta_seconds'       => null,
-            'avg_process_time'  => 0,
-            'current_batch'     => 0,
-            'total_batches'     => 0,
+            'eta_seconds' => null,
+            'avg_process_time' => 0,
+            'current_batch' => 0,
+            'total_batches' => 0,
         ]);
     }
 
@@ -314,7 +324,8 @@ class PipelineManager {
      * @param array $data Progress data to update.
      * @return void
      */
-    public function update_progress(array $data): void {
+    public function update_progress(array $data): void
+    {
         $current = $this->get_progress();
         $updated = wp_parse_args($data, $current);
 
@@ -341,7 +352,8 @@ class PipelineManager {
      * @param int    $count Amount to increment by.
      * @return void
      */
-    public function increment_progress(string $type, int $count = 1): void {
+    public function increment_progress(string $type, int $count = 1): void
+    {
         $progress = $this->get_progress();
 
         if (isset($progress[$type])) {
@@ -360,7 +372,8 @@ class PipelineManager {
      *
      * @return void
      */
-    public function handle_phase_complete(): void {
+    public function handle_phase_complete(): void
+    {
         // Check if there are more items to process in this phase
         $progress = $this->get_progress();
 
@@ -375,7 +388,8 @@ class PipelineManager {
      *
      * @return string Current phase name.
      */
-    public function get_current_phase(): string {
+    public function get_current_phase(): string
+    {
         return get_option(self::OPTION_PHASE, '');
     }
 
@@ -384,7 +398,8 @@ class PipelineManager {
      *
      * @return array Configuration array.
      */
-    public function get_config(): array {
+    public function get_config(): array
+    {
         return get_option(self::OPTION_CONFIG, []);
     }
 
@@ -394,7 +409,8 @@ class PipelineManager {
      * @param array $config Configuration updates.
      * @return void
      */
-    public function update_config(array $config): void {
+    public function update_config(array $config): void
+    {
         $current = $this->get_config();
         $updated = wp_parse_args($config, $current);
         update_option(self::OPTION_CONFIG, $updated, false);
@@ -407,7 +423,8 @@ class PipelineManager {
      * @param array  $context Additional context.
      * @return void
      */
-    public function fail(string $error, array $context = []): void {
+    public function fail(string $error, array $context = []): void
+    {
         update_option(self::OPTION_STATUS, 'failed', false);
         $this->update_last_activity();
 
@@ -421,7 +438,8 @@ class PipelineManager {
      *
      * @return void
      */
-    private function schedule_current_phase(): void {
+    private function schedule_current_phase(): void
+    {
         $phase = $this->get_current_phase();
 
         if (empty($phase) || !isset(self::PHASE_JOBS[$phase])) {
@@ -442,7 +460,7 @@ class PipelineManager {
 
         $this->log('info', 'Phase scheduled', [
             'phase' => $phase,
-            'hook'  => $hook,
+            'hook' => $hook,
         ]);
     }
 
@@ -451,7 +469,8 @@ class PipelineManager {
      *
      * @return void
      */
-    private function complete_pipeline(): void {
+    private function complete_pipeline(): void
+    {
         update_option(self::OPTION_STATUS, 'completed', false);
         update_option(self::OPTION_PHASE, '', false);
         $this->update_last_activity();
@@ -460,7 +479,7 @@ class PipelineManager {
         $progress = $this->get_progress();
 
         $this->log('info', 'Pipeline completed', [
-            'stats'    => $stats,
+            'stats' => $stats,
             'progress' => $progress,
         ]);
 
@@ -472,23 +491,24 @@ class PipelineManager {
      *
      * @return void
      */
-    private function reset_progress(): void {
+    private function reset_progress(): void
+    {
         update_option(self::OPTION_PROGRESS, [
-            'total'      => 0,
-            'completed'  => 0,
-            'failed'     => 0,
-            'skipped'    => 0,
+            'total' => 0,
+            'completed' => 0,
+            'failed' => 0,
+            'skipped' => 0,
             'percentage' => 0,
-            'phase'      => [
-                'total'      => 0,
-                'completed'  => 0,
-                'failed'     => 0,
+            'phase' => [
+                'total' => 0,
+                'completed' => 0,
+                'failed' => 0,
                 'percentage' => 0,
             ],
-            'eta_seconds'       => null,
-            'avg_process_time'  => 0,
-            'current_batch'     => 0,
-            'total_batches'     => 0,
+            'eta_seconds' => null,
+            'avg_process_time' => 0,
+            'current_batch' => 0,
+            'total_batches' => 0,
         ], false);
     }
 
@@ -497,12 +517,13 @@ class PipelineManager {
      *
      * @return void
      */
-    private function reset_phase_progress(): void {
+    private function reset_phase_progress(): void
+    {
         $progress = $this->get_progress();
         $progress['phase'] = [
-            'total'      => 0,
-            'completed'  => 0,
-            'failed'     => 0,
+            'total' => 0,
+            'completed' => 0,
+            'failed' => 0,
             'percentage' => 0,
         ];
         $progress['current_batch'] = 0;
@@ -516,7 +537,8 @@ class PipelineManager {
      * @param string $phase Phase name.
      * @return int Phase number (0 if not found).
      */
-    private function get_phase_number(string $phase): int {
+    private function get_phase_number(string $phase): int
+    {
         $flipped = array_flip(self::PHASES);
         return $flipped[$phase] ?? 0;
     }
@@ -526,7 +548,8 @@ class PipelineManager {
      *
      * @return array Statistics.
      */
-    private function get_pipeline_stats(): array {
+    private function get_pipeline_stats(): array
+    {
         global $wpdb;
 
         $entities_table = $wpdb->prefix . 'ai_entities';
@@ -537,9 +560,9 @@ class PipelineManager {
 
         if (!$entities_exists) {
             return [
-                'total_entities'   => 0,
-                'total_mentions'   => 0,
-                'avg_confidence'   => 0,
+                'total_entities' => 0,
+                'total_mentions' => 0,
+                'avg_confidence' => 0,
                 'entities_by_type' => [],
             ];
         }
@@ -565,9 +588,9 @@ class PipelineManager {
         );
 
         return [
-            'total_entities'   => $total_entities,
-            'total_mentions'   => $total_mentions,
-            'avg_confidence'   => round($avg_confidence, 3),
+            'total_entities' => $total_entities,
+            'total_mentions' => $total_mentions,
+            'avg_confidence' => round($avg_confidence, 3),
             'entities_by_type' => array_map(function ($row) {
                 return (int) $row->count;
             }, $entities_by_type),
@@ -579,23 +602,13 @@ class PipelineManager {
      *
      * @return array Entity IDs.
      */
-    private function get_propagating_entities(): array {
-        global $wpdb;
+    private function get_propagating_entities(): array
+    {
+        // Fix: Use a single option key instead of scanning transients with LIKE query.
+        // This requires the PropagateEntityChangeJob to update this option.
+        $active_propagations = get_option('vibe_ai_propagating_ids', []);
 
-        // Look for propagation transients
-        $results = $wpdb->get_col(
-            "SELECT option_name FROM {$wpdb->options}
-             WHERE option_name LIKE '_transient_vibe_ai_propagating_%'"
-        );
-
-        $entity_ids = [];
-        foreach ($results as $option_name) {
-            if (preg_match('/vibe_ai_propagating_(\d+)$/', $option_name, $matches)) {
-                $entity_ids[] = (int) $matches[1];
-            }
-        }
-
-        return $entity_ids;
+        return is_array($active_propagations) ? array_map('intval', $active_propagations) : [];
     }
 
     /**
@@ -603,7 +616,8 @@ class PipelineManager {
      *
      * @return void
      */
-    private function update_last_activity(): void {
+    private function update_last_activity(): void
+    {
         update_option(self::OPTION_LAST_ACTIVITY, current_time('mysql', true), false);
     }
 
@@ -615,7 +629,8 @@ class PipelineManager {
      * @param array  $context Additional context.
      * @return void
      */
-    private function log(string $level, string $message, array $context = []): void {
+    private function log(string $level, string $message, array $context = []): void
+    {
         if (function_exists('vibe_ai_log')) {
             vibe_ai_log($level, $message, $context);
         }

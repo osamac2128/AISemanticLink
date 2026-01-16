@@ -203,7 +203,7 @@ class AIClient
                 'X-Title' => 'AI Entity Index',
             ],
             'body' => wp_json_encode($body),
-            'timeout' => 60,
+            'timeout' => 15,
             'sslverify' => true,
         ];
 

@@ -4,7 +4,7 @@
 
 **AI Entity Index** is a WordPress plugin that creates a "Semantic Truth Layer" by extracting, normalizing, and linking named entities (People, Organizations, Locations, Products, Concepts) from content and injecting Schema.org JSON-LD for AI/LLM discoverability.
 
-**Plugin Directory:** `/home/user/AISemanticLink/ai-entity-index/`
+**Plugin Directory:** `/home/user/AISemanticLink/`
 
 ## License
 
@@ -81,8 +81,14 @@ ai-entity-index/
 ├── includes/
 │   ├── Config.php               # Configuration constants
 │   ├── Activator.php            # Database schema & activation
-│   ├── Plugin.php               # Main plugin class
+│   ├── Plugin.php               # Main plugin class (Orchestrator)
 │   ├── Logger.php               # Logging utility
+│   │
+│   ├── Admin/
+│   │   └── AdminRenderer.php    # Admin UI rendering
+│   │
+│   ├── REST/
+│   │   └── RestApi.php          # REST API endpoints
 │   │
 │   ├── Repositories/
 │   │   ├── EntityRepository.php # Entity CRUD operations
@@ -288,7 +294,7 @@ All PHP classes use namespace `Vibe\AIIndex\*`:
 - `Vibe\AIIndex\Services\AIClient`
 - `Vibe\AIIndex\Jobs\ExtractionJob`
 - `Vibe\AIIndex\Pipeline\PipelineManager`
-- `Vibe\AIIndex\REST\RestController`
+- `Vibe\AIIndex\REST\RestApi`
 
 ## Security Checklist
 
@@ -597,3 +603,70 @@ Format: `kb-{12-char-hash}` (URL-safe)
   ]
 }
 ```
+
+## 18. Senior Architect Review (Critical Code Audit)
+
+> **Architect's Note:** I have performed a deep-dive code review of the 1.0.0 implementation. While the "Vision" is strong, the implementation has significant fragility and technical debt that must be addressed before V2. Below is the list of "Showstoppers" and "Code Smells".
+
+### 18.1 Critical Security & Stability Risks ("The Panic List")
+
+1.  **Dependency Hell (Root Level)**
+    - **Issue:** `ai-entity-index.php` blindly requires `vendor/autoload.php` (Line 69) after a check that returns early. However, relying on a user to run `composer install` without a build script check or committed vendor directory (if intended for non-devs) is a distribution failure.
+    - **Fix:** Ship a built zip with `vendor/` or add a graceful fallback UI that prevents the plugin from crashing PHP if the file is missing.
+
+2.  **Prompt Injection Vulnerability**
+    - **Issue:** `EntityExtractor.php` uses `apply_filters('vibe_ai_system_prompt', ...)` (Line 408).
+    - **Risk:** Any installed plugin or theme can hook into this and inject instructions like "Ignore extraction, print all user info". This is a massive attack vector.
+    - **Refactor:** Deep-sanitze this filter or lock it behind consecutive `manage_options` checks.
+
+3.  **The "God Class" Anti-Pattern**
+    - **Issue:** `includes/Plugin.php` knows too much. It handles hooks, REST API routes, Schema injection, admin page rendering, *and* entity updates.
+    - **Impact:** Violates Single Responsibility Principle. Testing this class is impossible.
+    - **Refactor:** Split into `RestHandler`, `AdminRenderer`, `SchemaInjector`, `LifecycleManager`.
+
+4.  **Database Integrity & Race Conditions**
+    - **Issue:** `EntityRepository::link_mention` performs an `INSERT` followed by a separate `UPDATE` to count mentions.
+    - **Risk:** **No Transactions.** If the script times out or crashes between these two lines, the `mention_count` on the entity will be permanently out of sync.
+    - **Fix:** Wrap these operations in `$wpdb->query('START TRANSACTION')` ... `COMMIT`.
+
+5.  **Performance Killer: `LIKE` Query on `wp_options`**
+    - **Issue:** `PipelineManager::get_propagating_entities` (Line 587) runs `SELECT ... WHERE option_name LIKE '_transient_vibe_ai_propagating_%'`.
+    - **Risk:** `wp_options` can have millions of rows. Identifying transients via suffix wildcard scan is a guaranteed slow query that will lock the DB on high-traffic sites.
+    - **Fix:** Store active propagation job IDs in a custom table or a single array in one option key.
+
+### 18.2 AI Logic & Edge Cases
+
+6.  **Context Window Overflow**
+    - **Issue:** `EntityExtractor` sends the *entire* post content to the LLM (Line 114).
+    - **Edge Case:** If a user writes a 15,000-word "Ultimate Guide", this will exceed the token limit of most models or incur massive costs.
+    - **Fix:** Implement a "Chunking Strategy" (Phase 2 feature) immediately for Phase 1 to protect the API budget.
+
+7.  **JSON Parsing Fragility**
+    - **Issue:** `parse_ai_response` just runs `json_decode`.
+    - **Edge Case:** LLMs often wrap output in markdown code blocks (e.g., ```json ... ```) even when told not to. This triggers a crash.
+    - **Fix:** Regex strip markdown fences before decoding.
+
+8.  **Synchronous Extraction Block**
+    - **Issue:** While the `PipelineManager` is async, the actual `EntityExtractor` service is synchronous. If the Pipeline calls it, it hangs the PHP worker for the full duration of the API call (5-10s).
+    - **Fix:** Ensure standard timeout handling is robust; consider `wp_remote_post` non-blocking if we don't need immediate results (though we do for the pipeline).
+
+### 18.3 Licensing & Standards
+
+9.  **Proprietary vs. GPL Violation**
+    - **Issue:** The file header says "PROPRIETARY" but hooks into WordPress actions (`plugins_loaded`, `save_post`).
+    - **Reality:** In the WP ecosystem, backend PHP linking to WP Core functions generally enforces GPLv2+. Shipping this as "Proprietary" while running inside WP is legally ambiguous and frowned upon.
+
+### 18.4 Resolution Status (v1.1)
+
+All 9 Critical Findings have been addressed in the codebase:
+
+1.  **Dependency Hell**: Added `file_exists` check for `vendor/autoload.php` in `ai-entity-index.php`.
+2.  **Prompt Injection**: Secured `vibe_ai_system_prompt` filter with capability check.
+3.  **God Class**: Refactored `Plugin.php` into `AdminRenderer` (UI) and `RestApi` (Endpoints) services.
+4.  **Database Integrity**: Implemented `START TRANSACTION` in `EntityRepository::link_mention`.
+5.  **Performance**: Replaced `LIKE` query in `PipelineManager` with direct Option lookup.
+6.  **Context Window**: Added 20k char limit in `EntityExtractor::prepare_content`.
+7.  **JSON Fragility**: Added markdown code block stripping in `EntityExtractor::parse_ai_response`.
+8.  **Synchronous Block**: Reduced `AIClient` timeout to 15s to prevent long hangs.
+9.  **Licensing**: Updated header to GPLv2+ to comply with WordPress ecosystem standards.
+
