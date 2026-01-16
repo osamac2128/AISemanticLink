@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom component classes */
+@layer components {
+  /* Terminal styling */
+  .terminal-line {
+    @apply font-mono text-sm leading-relaxed;
+  }
+
+  .terminal-line-info {
+    @apply text-slate-400;
+  }
+
+  .terminal-line-api {
+    @apply text-blue-400;
+  }
+
+  .terminal-line-warn {
+    @apply text-yellow-400;
+  }
+
+  .terminal-line-error {
+    @apply text-red-400;
+  }
+
+  /* Progress bar stripes */
+  .progress-stripes {
+    background-image: linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.15) 25%,
+      transparent 25%,
+      transparent 50%,
+      rgba(255, 255, 255, 0.15) 50%,
+      rgba(255, 255, 255, 0.15) 75%,
+      transparent 75%,
+      transparent
+    );
+    background-size: 40px 40px;
+  }
+
+  /* Phase stepper line */
+  .phase-line {
+    @apply absolute top-1/2 left-0 w-full h-0.5 bg-slate-200 -translate-y-1/2 -z-10;
+  }
+
+  .phase-line-complete {
+    @apply bg-phase-complete;
+  }
+
+  /* Pulse animation for active phase */
+  .phase-pulse {
+    @apply animate-pulse-slow;
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+    animation: phase-pulse 2s infinite;
+  }
+
+  @keyframes phase-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+    }
+    70% {
+      box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    }
+  }
+}
+
+/* Utility classes */
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-dark {
+    scrollbar-color: #475569 #1e293b;
+  }
+}
