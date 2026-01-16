@@ -313,3 +313,284 @@ Location: `wp-content/uploads/vibe-ai-logs/YYYY-MM-DD.log`
 Levels: debug, info, warning, error
 
 API calls logged with duration for monitoring.
+
+---
+
+# Phase 2: Knowledge Base (RAG) Module
+
+## KB Overview
+
+The Knowledge Base module adds RAG (Retrieval-Augmented Generation) capabilities:
+- High-quality content chunking with stable citations
+- Embeddings via OpenRouter
+- MySQL vector storage (adapter-ready for external DBs)
+- Semantic search API endpoints
+- Admin UI for indexing, monitoring, and testing
+
+## KB Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     KB PIPELINE (Parallel to Entity Pipeline)   │
+│  KB1: Doc Build → KB2: Chunk → KB3: Embed → KB4: Store → KB5    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       KB DATA LAYER                             │
+│  wp_ai_kb_docs │ wp_ai_kb_chunks │ wp_ai_kb_vectors             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## KB Directory Structure (New Files)
+
+```
+includes/
+├── Pipeline/
+│   └── KBPipelineManager.php        # KB pipeline orchestration
+│
+├── Jobs/KB/
+│   ├── DocumentBuildJob.php         # KB Phase 1: Normalize content
+│   ├── ChunkBuildJob.php            # KB Phase 2: Generate chunks
+│   ├── EmbedChunksJob.php           # KB Phase 3: Generate embeddings
+│   ├── IndexUpsertJob.php           # KB Phase 4: Store vectors
+│   └── CleanupJob.php               # KB Phase 5: Remove stale data
+│
+├── Repositories/KB/
+│   ├── DocumentRepository.php       # wp_ai_kb_docs CRUD
+│   ├── ChunkRepository.php          # wp_ai_kb_chunks CRUD
+│   └── VectorRepository.php         # wp_ai_kb_vectors CRUD
+│
+├── Services/KB/
+│   ├── ContentNormalizer.php        # Strip Gutenberg/HTML to text
+│   ├── Chunker.php                  # Semantic chunking by headings
+│   ├── TokenEstimator.php           # Token count estimation
+│   ├── AnchorGenerator.php          # Stable chunk anchors
+│   ├── EmbeddingClient.php          # OpenRouter embeddings API
+│   ├── SimilaritySearch.php         # High-level search service
+│   ├── PIIDetector.php              # PII detection for safety
+│   ├── LlmsTxtGenerator.php         # /llms.txt generation
+│   ├── AISitemapGenerator.php       # AI-specific sitemap
+│   ├── ChangeFeedGenerator.php      # Change feed for AI agents
+│   └── VectorStore/
+│       ├── VectorStoreInterface.php # Adapter interface
+│       └── MySQLVectorStore.php     # MySQL implementation
+│
+└── REST/
+    └── KBController.php             # KB REST API endpoints
+
+admin/js/src/
+├── hooks/
+│   └── useKB.js                     # KB React Query hooks
+└── components/KnowledgeBase/
+    ├── index.jsx                    # KB routing
+    ├── KBOverview.jsx               # Dashboard with stats
+    ├── KBDocuments.jsx              # Document list table
+    ├── KBTestSearch.jsx             # Search testing UI
+    ├── KBSettings.jsx               # KB configuration
+    ├── KBLogs.jsx                   # KB-specific logs
+    └── ChunkViewer.jsx              # View chunks modal
+```
+
+## KB Database Schema
+
+### wp_ai_kb_docs (Indexed Documents)
+```sql
+id, post_id (UNIQUE), post_type, title, url, content_hash,
+chunk_count, status, last_indexed_at, created_at, updated_at
+```
+
+### wp_ai_kb_chunks (Content Chunks)
+```sql
+id, doc_id (FK), chunk_index, anchor (UNIQUE per doc),
+heading_path_json, chunk_text, chunk_hash, start_offset,
+end_offset, token_estimate, created_at
+```
+
+### wp_ai_kb_vectors (Embeddings)
+```sql
+id, chunk_id (UNIQUE FK), provider, model, dims,
+vector_payload (LONGBLOB), created_at
+```
+
+### KB Post Meta Keys
+- `_vibe_ai_kb_enabled` - Per-post KB inclusion
+- `_vibe_ai_kb_indexed_at` - Last indexed timestamp
+- `_vibe_ai_kb_version` - Index version
+- `_vibe_ai_kb_excluded` - Explicitly excluded
+
+## KB REST API Endpoints
+
+Base: `/wp-json/vibe-ai/v1/kb/`
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/search` | POST | Semantic similarity search |
+| `/status` | GET | KB pipeline & index status |
+| `/docs` | GET | List indexed documents |
+| `/docs/{post_id}` | GET | Document with chunks |
+| `/docs/{post_id}/exclude` | POST | Exclude from KB |
+| `/docs/{post_id}/include` | POST | Include in KB |
+| `/docs/{post_id}/reindex` | POST | Reindex single doc |
+| `/reindex` | POST | Trigger full reindex |
+| `/stop` | POST | Stop KB pipeline |
+| `/chunks/{chunk_id}` | GET | Chunk details |
+| `/settings` | GET/POST | KB configuration |
+| `/logs` | GET | KB-specific logs |
+| `/llms-txt` | GET | Generate llms.txt (public) |
+| `/sitemap` | GET | AI sitemap (public) |
+| `/feed` | GET | Change feed (public) |
+
+### Search Request/Response
+```json
+// POST /kb/search
+{
+  "query": "how to get started",
+  "top_k": 8,
+  "filters": {
+    "post_type": ["post", "page"],
+    "date_after": "2025-01-01"
+  }
+}
+
+// Response
+{
+  "results": [
+    {
+      "chunk_id": 123,
+      "post_id": 456,
+      "title": "Getting Started",
+      "url": "https://example.com/getting-started/",
+      "anchor": "kb-a1b2c3d4",
+      "heading_path": ["Introduction", "Quick Start"],
+      "chunk_text": "To get started with...",
+      "score": 0.892
+    }
+  ],
+  "total_scanned": 1500,
+  "query_time_ms": 234
+}
+```
+
+## KB Configuration Constants
+
+```php
+// Knowledge Base Settings
+KB_ENABLED = false;
+KB_EMBEDDING_MODEL = 'openai/text-embedding-3-small';
+KB_CHUNK_TOKENS_TARGET = 450;
+KB_CHUNK_OVERLAP_TOKENS = 60;
+KB_TOP_K_DEFAULT = 8;
+KB_MAX_SCAN_VECTORS = 5000;
+KB_BATCH_SIZE_CHUNKS = 25;
+KB_MIN_CHUNK_TOKENS = 50;
+KB_MAX_CHUNK_TOKENS = 800;
+```
+
+## KB WordPress Hooks
+
+### Actions
+```php
+do_action('vibe_ai_kb_pipeline_started', array $options);
+do_action('vibe_ai_kb_pipeline_phase_changed', string $phase, array $stats);
+do_action('vibe_ai_kb_pipeline_completed', array $stats);
+do_action('vibe_ai_kb_document_indexed', int $post_id);
+do_action('vibe_ai_kb_post_scheduled', int $post_id);
+do_action('vibe_ai_kb_post_removed', int $post_id);
+do_action('vibe_ai_kb_cleanup_complete', array $stats);
+```
+
+### Filters
+```php
+apply_filters('vibe_ai_kb_post_types', array $post_types);
+apply_filters('vibe_ai_kb_should_index_post', bool $should, int $post_id);
+apply_filters('vibe_ai_kb_content', string $content, int $post_id);
+apply_filters('vibe_ai_kb_chunks', array $chunks, int $post_id);
+apply_filters('vibe_ai_kb_search_results', array $results, string $query);
+```
+
+## KB Namespaces
+
+```php
+Vibe\AIIndex\Pipeline\KBPipelineManager
+Vibe\AIIndex\Jobs\KB\DocumentBuildJob
+Vibe\AIIndex\Jobs\KB\ChunkBuildJob
+Vibe\AIIndex\Jobs\KB\EmbedChunksJob
+Vibe\AIIndex\Jobs\KB\IndexUpsertJob
+Vibe\AIIndex\Jobs\KB\CleanupJob
+Vibe\AIIndex\Repositories\KB\DocumentRepository
+Vibe\AIIndex\Repositories\KB\ChunkRepository
+Vibe\AIIndex\Repositories\KB\VectorRepository
+Vibe\AIIndex\Services\KB\ContentNormalizer
+Vibe\AIIndex\Services\KB\Chunker
+Vibe\AIIndex\Services\KB\EmbeddingClient
+Vibe\AIIndex\Services\KB\SimilaritySearch
+Vibe\AIIndex\Services\KB\VectorStore\VectorStoreInterface
+Vibe\AIIndex\Services\KB\VectorStore\MySQLVectorStore
+Vibe\AIIndex\REST\KBController
+```
+
+## KB Key Patterns
+
+### Chunking Algorithm
+1. Split by H2/H3 heading boundaries
+2. If section > target tokens, split by paragraphs
+3. If still too large, split by sentences
+4. Add overlap from previous chunk
+5. Generate stable anchor: `kb-{hash(post_id|heading_path|chunk_index|content_hash)}`
+
+### Vector Storage
+- Vectors stored as packed binary floats (LONGBLOB)
+- Pack: `pack('f*', ...$vector)`
+- Unpack: `unpack('f*', $binary)`
+- Cosine similarity for search
+- Pre-filter by post_type/taxonomy before vector scan
+
+### Stable Anchors
+Anchors are deterministic: same content always produces same anchor.
+Format: `kb-{12-char-hash}` (URL-safe)
+
+## KB Error Codes
+
+| Code | Meaning | Recovery |
+|------|---------|----------|
+| E101 | Chunk build failed | Log & retry doc |
+| E102 | Embedding failed | Retry with backoff |
+| E103 | Vector store error | Log & investigate |
+
+## AI Publishing Outputs
+
+### /llms.txt
+```
+# Site Name
+> Brief description
+
+## Start Here
+- [Getting Started](/getting-started/) - How to begin
+
+## Full Index
+- [Page 1](/page-1/)
+```
+
+### AI Sitemap (/ai-sitemap.xml)
+```xml
+<urlset xmlns:ai="http://vibeai.dev/ai-sitemap">
+  <url>
+    <loc>https://example.com/page/</loc>
+    <ai:title>Page Title</ai:title>
+    <ai:chunks>5</ai:chunks>
+    <ai:hash>abc123</ai:hash>
+  </url>
+</urlset>
+```
+
+### Change Feed (/kb/feed)
+```json
+{
+  "feed_version": "1.0",
+  "feed_hash": "abc123",
+  "changes": [
+    {"post_id": 123, "url": "...", "change_type": "modified"}
+  ]
+}
+```

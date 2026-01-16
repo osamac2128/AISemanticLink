@@ -13,6 +13,7 @@ import EntityManager from './components/EntityManager';
 import EntityDrawer from './components/EntityDrawer';
 import Settings from './components/Settings';
 import ActivityLog from './components/ActivityLog';
+import KnowledgeBase from './components/KnowledgeBase';
 
 /**
  * Global data from WordPress (localized via wp_localize_script).
@@ -101,6 +102,7 @@ export default function App() {
                 path="/logs"
                 element={<ActivityLog vibeAiData={vibeAiData} />}
               />
+              <Route path="/kb/*" element={<KnowledgeBase vibeAiData={vibeAiData} />} />
               {/* Catch-all redirect */}
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>

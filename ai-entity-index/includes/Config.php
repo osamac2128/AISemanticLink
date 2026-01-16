@@ -132,6 +132,15 @@ class Config
     /** @var string Database table name for aliases (without prefix) */
     public const TABLE_ALIASES = 'ai_aliases';
 
+    /** @var string Database table name for KB documents (without prefix) */
+    public const TABLE_KB_DOCS = 'ai_kb_docs';
+
+    /** @var string Database table name for KB chunks (without prefix) */
+    public const TABLE_KB_CHUNKS = 'ai_kb_chunks';
+
+    /** @var string Database table name for KB vectors (without prefix) */
+    public const TABLE_KB_VECTORS = 'ai_kb_vectors';
+
     // =================================================================
     // Post Meta Keys
     // =================================================================
@@ -227,6 +236,82 @@ class Config
     /** @var string Required capability for admin endpoints */
     public const REQUIRED_CAPABILITY = 'manage_options';
 
+    // =================================================================
+    // Knowledge Base Configuration
+    // =================================================================
+
+    /** @var bool Whether KB feature is enabled by default */
+    public const KB_ENABLED = false;
+
+    /** @var string Default embedding model for KB vectors */
+    public const KB_EMBEDDING_MODEL = 'openai/text-embedding-3-small';
+
+    /** @var int Target token count per chunk */
+    public const KB_CHUNK_TOKENS_TARGET = 450;
+
+    /** @var int Token overlap between consecutive chunks */
+    public const KB_CHUNK_OVERLAP_TOKENS = 60;
+
+    /** @var int Default number of top results to return from vector search */
+    public const KB_TOP_K_DEFAULT = 8;
+
+    /** @var int Maximum vectors to scan during search */
+    public const KB_MAX_SCAN_VECTORS = 5000;
+
+    /** @var int Batch size for processing chunks */
+    public const KB_BATCH_SIZE_CHUNKS = 25;
+
+    /** @var int Minimum tokens for a valid chunk */
+    public const KB_MIN_CHUNK_TOKENS = 50;
+
+    /** @var int Maximum tokens allowed per chunk */
+    public const KB_MAX_CHUNK_TOKENS = 800;
+
+    // =================================================================
+    // KB Post Meta Keys
+    // =================================================================
+
+    /** @var string Post meta key for KB enabled flag */
+    public const KB_META_ENABLED = '_vibe_ai_kb_enabled';
+
+    /** @var string Post meta key for last KB index timestamp */
+    public const KB_META_INDEXED_AT = '_vibe_ai_kb_indexed_at';
+
+    /** @var string Post meta key for KB index version */
+    public const KB_META_VERSION = '_vibe_ai_kb_version';
+
+    /** @var string Post meta key for KB exclusion flag */
+    public const KB_META_EXCLUDED = '_vibe_ai_kb_excluded';
+
+    // =================================================================
+    // KB Pipeline Phases
+    // =================================================================
+
+    /** @var array<string> KB pipeline processing phases */
+    public const KB_PHASES = [
+        'kb_document_build',
+        'kb_chunk_build',
+        'kb_embed_chunks',
+        'kb_index_upsert',
+        'kb_cleanup',
+    ];
+
+    // =================================================================
+    // KB Status Values
+    // =================================================================
+
+    /** @var string KB document status: pending processing */
+    public const KB_STATUS_PENDING = 'pending';
+
+    /** @var string KB document status: successfully indexed */
+    public const KB_STATUS_INDEXED = 'indexed';
+
+    /** @var string KB document status: error during processing */
+    public const KB_STATUS_ERROR = 'error';
+
+    /** @var string KB document status: excluded from indexing */
+    public const KB_STATUS_EXCLUDED = 'excluded';
+
     /**
      * Get the Schema.org type for an internal entity type.
      *
@@ -278,5 +363,42 @@ class Config
             return 'low';
         }
         return 'reject';
+    }
+
+    /**
+     * Get post types enabled for Knowledge Base indexing.
+     *
+     * @return array<string> Filterable array of post types
+     */
+    public static function getKBPostTypes(): array
+    {
+        $default_types = self::DEFAULT_POST_TYPES;
+
+        /**
+         * Filter the post types enabled for KB indexing.
+         *
+         * @param array<string> $post_types Array of post type slugs
+         */
+        return apply_filters('vibe_ai_kb_post_types', $default_types);
+    }
+
+    /**
+     * Check if Knowledge Base feature is enabled.
+     *
+     * @return bool True if KB is enabled, false otherwise
+     */
+    public static function isKBEnabled(): bool
+    {
+        return (bool) get_option('vibe_ai_kb_enabled', self::KB_ENABLED);
+    }
+
+    /**
+     * Get the configured embedding model for KB vectors.
+     *
+     * @return string The embedding model identifier
+     */
+    public static function getEmbeddingModel(): string
+    {
+        return get_option('vibe_ai_kb_embedding_model', self::KB_EMBEDDING_MODEL);
     }
 }

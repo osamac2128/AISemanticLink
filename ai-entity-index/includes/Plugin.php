@@ -48,6 +48,9 @@ class Plugin
         $this->registerRestApi();
         $this->registerActionSchedulerHooks();
         $this->registerEntityHooks();
+
+        // Register KB hooks
+        $this->registerKBHooks();
     }
 
     /**
@@ -688,5 +691,142 @@ class Plugin
     public function getLogger(): Logger
     {
         return $this->logger;
+    }
+
+    // =================================================================
+    // Knowledge Base Integration
+    // =================================================================
+
+    /**
+     * Register KB-specific hooks.
+     */
+    private function registerKBHooks(): void
+    {
+        // Only register if KB is enabled
+        if (!Config::isKBEnabled()) {
+            return;
+        }
+
+        // Schedule KB reindex on post save
+        add_action('save_post', [$this, 'scheduleKBReindex'], 20, 3);
+
+        // Remove from KB on post delete
+        add_action('before_delete_post', [$this, 'removeFromKB']);
+
+        // Exclude from KB on trash
+        add_action('wp_trash_post', [$this, 'excludeFromKB']);
+
+        // Restore to KB on untrash
+        add_action('untrash_post', [$this, 'includeInKB']);
+
+        // Register KB REST routes
+        add_action('rest_api_init', [$this, 'registerKBRoutes']);
+
+        // Register KB Action Scheduler hooks
+        $this->registerKBJobHooks();
+    }
+
+    /**
+     * Schedule KB reindex for a post on save.
+     */
+    public function scheduleKBReindex(int $postId, \WP_Post $post, bool $update): void
+    {
+        // Skip autosaves and revisions
+        if (wp_is_post_autosave($postId) || wp_is_post_revision($postId)) {
+            return;
+        }
+
+        // Skip if not a supported post type
+        $kbPostTypes = apply_filters('vibe_ai_kb_post_types', Config::getKBPostTypes());
+        if (!in_array($post->post_type, $kbPostTypes, true)) {
+            return;
+        }
+
+        // Skip if post is not published
+        if ($post->post_status !== 'publish') {
+            return;
+        }
+
+        // Skip if explicitly excluded
+        if (get_post_meta($postId, Config::KB_META_EXCLUDED, true)) {
+            return;
+        }
+
+        // Schedule reindex via KBPipelineManager
+        $kbManager = new \Vibe\AIIndex\Pipeline\KBPipelineManager();
+        $kbManager->schedulePost($postId);
+
+        do_action('vibe_ai_kb_post_scheduled', $postId);
+    }
+
+    /**
+     * Remove post from KB on delete.
+     */
+    public function removeFromKB(int $postId): void
+    {
+        $docRepo = new \Vibe\AIIndex\Repositories\KB\DocumentRepository();
+        $docRepo->deleteByPostId($postId);
+
+        do_action('vibe_ai_kb_post_removed', $postId);
+    }
+
+    /**
+     * Mark post as excluded from KB on trash.
+     */
+    public function excludeFromKB(int $postId): void
+    {
+        update_post_meta($postId, Config::KB_META_EXCLUDED, '1');
+
+        $docRepo = new \Vibe\AIIndex\Repositories\KB\DocumentRepository();
+        $doc = $docRepo->findByPostId($postId);
+        if ($doc) {
+            $docRepo->setStatus($doc->id, Config::KB_STATUS_EXCLUDED);
+        }
+
+        do_action('vibe_ai_kb_post_excluded', $postId);
+    }
+
+    /**
+     * Re-include post in KB on untrash.
+     */
+    public function includeInKB(int $postId): void
+    {
+        delete_post_meta($postId, Config::KB_META_EXCLUDED);
+
+        // Schedule for reindex
+        $kbManager = new \Vibe\AIIndex\Pipeline\KBPipelineManager();
+        $kbManager->schedulePost($postId);
+
+        do_action('vibe_ai_kb_post_included', $postId);
+    }
+
+    /**
+     * Register KB REST API routes.
+     */
+    public function registerKBRoutes(): void
+    {
+        $controller = new \Vibe\AIIndex\REST\KBController();
+        $controller->register_routes();
+    }
+
+    /**
+     * Register KB job hooks with Action Scheduler.
+     */
+    private function registerKBJobHooks(): void
+    {
+        add_action(\Vibe\AIIndex\Jobs\KB\DocumentBuildJob::HOOK,
+            [\Vibe\AIIndex\Jobs\KB\DocumentBuildJob::class, 'execute'], 10, 2);
+
+        add_action(\Vibe\AIIndex\Jobs\KB\ChunkBuildJob::HOOK,
+            [\Vibe\AIIndex\Jobs\KB\ChunkBuildJob::class, 'execute'], 10, 1);
+
+        add_action(\Vibe\AIIndex\Jobs\KB\EmbedChunksJob::HOOK,
+            [\Vibe\AIIndex\Jobs\KB\EmbedChunksJob::class, 'execute'], 10, 1);
+
+        add_action(\Vibe\AIIndex\Jobs\KB\IndexUpsertJob::HOOK,
+            [\Vibe\AIIndex\Jobs\KB\IndexUpsertJob::class, 'execute'], 10, 1);
+
+        add_action(\Vibe\AIIndex\Jobs\KB\CleanupJob::HOOK,
+            [\Vibe\AIIndex\Jobs\KB\CleanupJob::class, 'execute'], 10, 0);
     }
 }
