@@ -41,6 +41,9 @@ class Activator
         // Create or update database tables
         self::createTables();
 
+        // Create Knowledge Base tables
+        self::createKBTables();
+
         // Set default options
         self::setDefaultOptions();
 
@@ -223,6 +226,151 @@ class Activator
     }
 
     /**
+     * Create Knowledge Base database tables.
+     *
+     * @return void
+     */
+    private static function createKBTables(): void
+    {
+        global $wpdb;
+
+        $charset_collate = $wpdb->get_charset_collate();
+        $prefix = $wpdb->prefix;
+
+        // Include WordPress upgrade functions for dbDelta
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        // KB Documents table - Tracks indexed posts/pages
+        $kb_docs_table = $prefix . Config::TABLE_KB_DOCS;
+        $kb_docs_sql = "CREATE TABLE {$kb_docs_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            post_id bigint(20) unsigned NOT NULL,
+            post_type varchar(50) NOT NULL,
+            title varchar(255) NOT NULL,
+            url varchar(2048) NOT NULL,
+            content_hash varchar(64) NOT NULL,
+            chunk_count int unsigned DEFAULT 0,
+            status varchar(20) DEFAULT 'pending',
+            last_indexed_at datetime DEFAULT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            UNIQUE KEY idx_post_id (post_id),
+            KEY idx_status (status),
+            KEY idx_post_type (post_type),
+            KEY idx_content_hash (content_hash)
+        ) {$charset_collate};";
+
+        dbDelta($kb_docs_sql);
+
+        // KB Chunks table - Content chunks for embedding
+        $kb_chunks_table = $prefix . Config::TABLE_KB_CHUNKS;
+        $kb_chunks_sql = "CREATE TABLE {$kb_chunks_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            doc_id bigint(20) unsigned NOT NULL,
+            chunk_index int unsigned NOT NULL,
+            anchor varchar(100) NOT NULL,
+            heading_path_json text,
+            chunk_text longtext NOT NULL,
+            chunk_hash varchar(64) NOT NULL,
+            start_offset int unsigned DEFAULT 0,
+            end_offset int unsigned DEFAULT 0,
+            token_estimate int unsigned DEFAULT 0,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            UNIQUE KEY idx_doc_anchor (doc_id, anchor),
+            KEY idx_doc_id (doc_id),
+            KEY idx_chunk_hash (chunk_hash)
+        ) {$charset_collate};";
+
+        dbDelta($kb_chunks_sql);
+
+        // KB Vectors table - Stores embedding vectors
+        $kb_vectors_table = $prefix . Config::TABLE_KB_VECTORS;
+        $kb_vectors_sql = "CREATE TABLE {$kb_vectors_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            chunk_id bigint(20) unsigned NOT NULL,
+            provider varchar(50) DEFAULT 'openrouter',
+            model varchar(100) NOT NULL,
+            dims int unsigned DEFAULT NULL,
+            vector_payload longblob NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            UNIQUE KEY idx_chunk_id (chunk_id),
+            KEY idx_model (model)
+        ) {$charset_collate};";
+
+        dbDelta($kb_vectors_sql);
+
+        // Add foreign keys for KB tables
+        self::addKBForeignKeys();
+    }
+
+    /**
+     * Add foreign key constraints to KB tables.
+     *
+     * @return void
+     */
+    private static function addKBForeignKeys(): void
+    {
+        global $wpdb;
+
+        $prefix = $wpdb->prefix;
+        $posts_table = $wpdb->posts;
+        $kb_docs_table = $prefix . Config::TABLE_KB_DOCS;
+        $kb_chunks_table = $prefix . Config::TABLE_KB_CHUNKS;
+        $kb_vectors_table = $prefix . Config::TABLE_KB_VECTORS;
+
+        // FK: kb_docs -> posts
+        $fk_check_docs_post = $wpdb->get_var(
+            "SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+             WHERE CONSTRAINT_SCHEMA = DATABASE()
+             AND TABLE_NAME = '{$kb_docs_table}'
+             AND CONSTRAINT_NAME = 'fk_kb_docs_post'"
+        );
+
+        if ((int) $fk_check_docs_post === 0) {
+            $wpdb->query(
+                "ALTER TABLE {$kb_docs_table}
+                 ADD CONSTRAINT fk_kb_docs_post
+                 FOREIGN KEY (post_id) REFERENCES {$posts_table} (ID) ON DELETE CASCADE"
+            );
+        }
+
+        // FK: kb_chunks -> kb_docs
+        $fk_check_chunks_doc = $wpdb->get_var(
+            "SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+             WHERE CONSTRAINT_SCHEMA = DATABASE()
+             AND TABLE_NAME = '{$kb_chunks_table}'
+             AND CONSTRAINT_NAME = 'fk_kb_chunks_doc'"
+        );
+
+        if ((int) $fk_check_chunks_doc === 0) {
+            $wpdb->query(
+                "ALTER TABLE {$kb_chunks_table}
+                 ADD CONSTRAINT fk_kb_chunks_doc
+                 FOREIGN KEY (doc_id) REFERENCES {$kb_docs_table} (id) ON DELETE CASCADE"
+            );
+        }
+
+        // FK: kb_vectors -> kb_chunks
+        $fk_check_vectors_chunk = $wpdb->get_var(
+            "SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+             WHERE CONSTRAINT_SCHEMA = DATABASE()
+             AND TABLE_NAME = '{$kb_vectors_table}'
+             AND CONSTRAINT_NAME = 'fk_kb_vectors_chunk'"
+        );
+
+        if ((int) $fk_check_vectors_chunk === 0) {
+            $wpdb->query(
+                "ALTER TABLE {$kb_vectors_table}
+                 ADD CONSTRAINT fk_kb_vectors_chunk
+                 FOREIGN KEY (chunk_id) REFERENCES {$kb_chunks_table} (id) ON DELETE CASCADE"
+            );
+        }
+    }
+
+    /**
      * Set default plugin options.
      *
      * @return void
@@ -295,6 +443,7 @@ class Activator
 
         if (version_compare($installed_version, self::DB_VERSION, '<')) {
             self::createTables();
+            self::createKBTables();
             update_option(self::DB_VERSION_OPTION, self::DB_VERSION);
         }
     }
@@ -319,9 +468,19 @@ class Activator
         $aliases_table = $wpdb->prefix . Config::TABLE_ALIASES;
         $entities_table = $wpdb->prefix . Config::TABLE_ENTITIES;
 
+        // KB tables (drop in correct order: vectors -> chunks -> docs)
+        $kb_vectors_table = $wpdb->prefix . Config::TABLE_KB_VECTORS;
+        $kb_chunks_table = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $kb_docs_table = $wpdb->prefix . Config::TABLE_KB_DOCS;
+
         $wpdb->query("DROP TABLE IF EXISTS {$mentions_table}");
         $wpdb->query("DROP TABLE IF EXISTS {$aliases_table}");
         $wpdb->query("DROP TABLE IF EXISTS {$entities_table}");
+
+        // Drop KB tables
+        $wpdb->query("DROP TABLE IF EXISTS {$kb_vectors_table}");
+        $wpdb->query("DROP TABLE IF EXISTS {$kb_chunks_table}");
+        $wpdb->query("DROP TABLE IF EXISTS {$kb_docs_table}");
 
         // Delete all plugin options
         $wpdb->query(
