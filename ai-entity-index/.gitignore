@@ -5,8 +5,10 @@
 # Build artifacts
 /admin/js/build/
 /build/
-/dist/
-*.zip
+
+# Ignore build temp but keep dist for releases
+!/dist/
+!/dist/*.zip
 
 # Environment files
 .env
