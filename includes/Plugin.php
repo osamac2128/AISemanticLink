@@ -50,21 +50,8 @@ class Plugin
         $adminRenderer->register();
         $this->logger->debug('Admin renderer registered');
 
-        // Register REST API routes on the proper hook
-        $logger = $this->logger;
-        add_action('rest_api_init', function () use ($logger) {
-            $logger->debug('REST API init hook triggered');
-
-            // Main REST controller (entities, pipeline, logs, status)
-            $restController = new \Vibe\AIIndex\REST\RestController();
-            $restController->register_routes();
-            $logger->debug('RestController routes registered');
-
-            // Knowledge Base REST controller
-            $kbController = new \Vibe\AIIndex\REST\KBController();
-            $kbController->register_routes();
-            $logger->debug('KBController routes registered');
-        });
+        // Register REST API routes
+        $this->registerRestRoutes();
 
         // Register Core Hooks
         $this->registerPublicHooks();
@@ -81,6 +68,29 @@ class Plugin
         $this->logger->debug('KB hooks registered');
 
         $this->logger->info('Plugin initialization completed successfully');
+    }
+
+    /**
+     * Register REST API routes.
+     *
+     * @return void
+     */
+    private function registerRestRoutes(): void
+    {
+        // Register REST API routes on the proper hook
+        add_action('rest_api_init', function () {
+            $this->logger->debug('REST API init hook triggered');
+
+            // Main REST controller (entities, pipeline, logs, status)
+            $restController = new \Vibe\AIIndex\REST\RestController();
+            $restController->register_routes();
+            $this->logger->debug('RestController routes registered');
+
+            // Knowledge Base REST controller
+            $kbController = new \Vibe\AIIndex\REST\KBController();
+            $kbController->register_routes();
+            $this->logger->debug('KBController routes registered');
+        });
     }
 
     /**
