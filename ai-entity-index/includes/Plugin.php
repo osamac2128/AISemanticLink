@@ -214,7 +214,7 @@ class Plugin
             return;
         }
 
-        $asset_file = VIBE_AI_PLUGIN_DIR . 'build/index.asset.php';
+        $asset_file = VIBE_AI_PLUGIN_DIR . 'admin/js/build/index.jsx.asset.php';
         $asset = file_exists($asset_file)
             ? require $asset_file
             : ['dependencies' => [], 'version' => $this->version];
@@ -222,7 +222,7 @@ class Plugin
         // Enqueue React app
         wp_enqueue_script(
             'vibe-ai-admin',
-            VIBE_AI_PLUGIN_URL . 'build/index.js',
+            VIBE_AI_PLUGIN_URL . 'admin/js/build/index.jsx.js',
             $asset['dependencies'],
             $asset['version'],
             true
@@ -230,7 +230,7 @@ class Plugin
 
         wp_enqueue_style(
             'vibe-ai-admin',
-            VIBE_AI_PLUGIN_URL . 'build/index.css',
+            VIBE_AI_PLUGIN_URL . 'admin/js/build/index.jsx.css',
             [],
             $asset['version']
         );
