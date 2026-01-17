@@ -95,6 +95,17 @@ class Plugin
     }
 
     /**
+     * Register REST API routes using the RestController.
+     *
+     * @return void
+     */
+    public function registerRestRoutes(): void
+    {
+        $controller = new \Vibe\AIIndex\REST\RestController();
+        $controller->register_routes();
+    }
+
+    /**
      * Register Action Scheduler hooks.
      *
      * @return void
@@ -286,198 +297,6 @@ class Plugin
         }
 
         wp_send_json_success();
-    }
-
-    /**
-     * Register REST API routes.
-     *
-     * @return void
-     */
-    public function registerRestRoutes(): void
-    {
-        // Status endpoint
-        register_rest_route(Config::REST_NAMESPACE, '/status', [
-            'methods' => 'GET',
-            'callback' => [$this, 'getStatus'],
-            'permission_callback' => [$this, 'checkAdminPermission'],
-        ]);
-
-        // Entities endpoints
-        register_rest_route(Config::REST_NAMESPACE, '/entities', [
-            'methods' => 'GET',
-            'callback' => [$this, 'getEntities'],
-            'permission_callback' => [$this, 'checkAdminPermission'],
-        ]);
-
-        register_rest_route(Config::REST_NAMESPACE, '/entities/(?P<id>\d+)', [
-            [
-                'methods' => 'GET',
-                'callback' => [$this, 'getEntity'],
-                'permission_callback' => [$this, 'checkAdminPermission'],
-            ],
-            [
-                'methods' => 'PATCH',
-                'callback' => [$this, 'updateEntity'],
-                'permission_callback' => [$this, 'checkAdminPermission'],
-            ],
-        ]);
-
-        register_rest_route(Config::REST_NAMESPACE, '/entities/merge', [
-            'methods' => 'POST',
-            'callback' => [$this, 'mergeEntities'],
-            'permission_callback' => [$this, 'checkAdminPermission'],
-        ]);
-
-        // Pipeline endpoints
-        register_rest_route(Config::REST_NAMESPACE, '/pipeline/start', [
-            'methods' => 'POST',
-            'callback' => [$this, 'startPipeline'],
-            'permission_callback' => [$this, 'checkAdminPermission'],
-        ]);
-
-        register_rest_route(Config::REST_NAMESPACE, '/pipeline/stop', [
-            'methods' => 'POST',
-            'callback' => [$this, 'stopPipeline'],
-            'permission_callback' => [$this, 'checkAdminPermission'],
-        ]);
-    }
-
-    /**
-     * Check if current user has admin permissions.
-     *
-     * @return bool
-     */
-    public function checkAdminPermission(): bool
-    {
-        return current_user_can(Config::REQUIRED_CAPABILITY);
-    }
-
-    /**
-     * REST callback: Get pipeline status.
-     *
-     * @param \WP_REST_Request $request The request object
-     * @return \WP_REST_Response
-     */
-    public function getStatus(\WP_REST_Request $request): \WP_REST_Response
-    {
-        // Placeholder - will be implemented by StatusService
-        return new \WP_REST_Response([
-            'status' => 'idle',
-            'current_phase' => null,
-            'progress' => [
-                'total' => 0,
-                'completed' => 0,
-                'failed' => 0,
-                'percentage' => 0,
-            ],
-            'stats' => $this->getStats(),
-            'last_activity' => null,
-            'propagating_entities' => [],
-        ]);
-    }
-
-    /**
-     * Get entity statistics.
-     *
-     * @return array<string, mixed>
-     */
-    private function getStats(): array
-    {
-        global $wpdb;
-
-        $entities_table = $wpdb->prefix . Config::TABLE_ENTITIES;
-        $mentions_table = $wpdb->prefix . Config::TABLE_MENTIONS;
-
-        $total_entities = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$entities_table}");
-        $total_mentions = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$mentions_table}");
-        $avg_confidence = (float) $wpdb->get_var("SELECT AVG(confidence) FROM {$mentions_table}") ?: 0.0;
-
-        return [
-            'total_entities' => $total_entities,
-            'total_mentions' => $total_mentions,
-            'avg_confidence' => round($avg_confidence, 3),
-        ];
-    }
-
-    /**
-     * REST callback: Get entities list.
-     *
-     * @param \WP_REST_Request $request The request object
-     * @return \WP_REST_Response
-     */
-    public function getEntities(\WP_REST_Request $request): \WP_REST_Response
-    {
-        // Placeholder - will be implemented by EntityRepository
-        return new \WP_REST_Response([
-            'entities' => [],
-            'total' => 0,
-            'page' => 1,
-            'per_page' => 20,
-        ]);
-    }
-
-    /**
-     * REST callback: Get single entity.
-     *
-     * @param \WP_REST_Request $request The request object
-     * @return \WP_REST_Response
-     */
-    public function getEntity(\WP_REST_Request $request): \WP_REST_Response
-    {
-        $id = (int) $request->get_param('id');
-        // Placeholder - will be implemented by EntityRepository
-        return new \WP_REST_Response(['entity' => null], 404);
-    }
-
-    /**
-     * REST callback: Update entity.
-     *
-     * @param \WP_REST_Request $request The request object
-     * @return \WP_REST_Response
-     */
-    public function updateEntity(\WP_REST_Request $request): \WP_REST_Response
-    {
-        $id = (int) $request->get_param('id');
-        // Placeholder - will be implemented by EntityRepository
-        return new \WP_REST_Response(['success' => false], 501);
-    }
-
-    /**
-     * REST callback: Merge entities.
-     *
-     * @param \WP_REST_Request $request The request object
-     * @return \WP_REST_Response
-     */
-    public function mergeEntities(\WP_REST_Request $request): \WP_REST_Response
-    {
-        // Placeholder - will be implemented by EntityRepository
-        return new \WP_REST_Response(['success' => false], 501);
-    }
-
-    /**
-     * REST callback: Start pipeline.
-     *
-     * @param \WP_REST_Request $request The request object
-     * @return \WP_REST_Response
-     */
-    public function startPipeline(\WP_REST_Request $request): \WP_REST_Response
-    {
-        // Placeholder - will be implemented by PipelineManager
-        $this->logger->info('Pipeline start requested');
-        return new \WP_REST_Response(['success' => true, 'message' => 'Pipeline started']);
-    }
-
-    /**
-     * REST callback: Stop pipeline.
-     *
-     * @param \WP_REST_Request $request The request object
-     * @return \WP_REST_Response
-     */
-    public function stopPipeline(\WP_REST_Request $request): \WP_REST_Response
-    {
-        // Placeholder - will be implemented by PipelineManager
-        $this->logger->info('Pipeline stop requested');
-        return new \WP_REST_Response(['success' => true, 'message' => 'Pipeline stopped']);
     }
 
     /**
