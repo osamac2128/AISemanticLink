@@ -27,11 +27,28 @@ async function apiFetch(endpoint, options = {}) {
   const config = getConfig();
   const url = `${config.apiUrl}${endpoint}`;
 
+  if (!config.nonce) {
+    console.error('CRITICAL: VibeAiData Nonce is MISSING!', window.vibeAiData);
+    // alert('VibeAI Error: Nonce missing. Please report this.');
+  }
+
+  /* 
+   * SIMPLIFICATION:
+   * Only add Content-Type: application/json if there is a body.
+   * Sending it on GET requests triggers 403s on some strict server configs (ModSecurity etc).
+   */
   const headers = {
-    'Content-Type': 'application/json',
     'X-WP-Nonce': config.nonce,
     ...options.headers,
   };
+
+  // Add JSON content type only if we have a body (POST/PUT/PATCH)
+  if (options.body) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  // Use console.error to ensure visibility in user's filters
+  console.log(`[DEBUG] API Request: ${endpoint}`, { headers, config });
 
   const response = await fetch(url, {
     ...options,
@@ -44,6 +61,11 @@ async function apiFetch(endpoint, options = {}) {
   const isJson = contentType && contentType.includes('application/json');
 
   if (!response.ok) {
+    if (response.status === 403) {
+      console.error('CRITICAL: 403 Forbidden. Headers sent:', headers);
+      console.error('Window VibeData:', window.vibeAiData);
+    }
+
     let errorMessage = `API Error: ${response.status} ${response.statusText}`;
 
     if (isJson) {
