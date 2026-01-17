@@ -3,7 +3,7 @@
  * Plugin Name: AI Entity Index
  * Plugin URI: https://vibeai.dev/ai-entity-index
  * Description: Semantic Truth Layer for WordPress - Extract, normalize, and link named entities with Schema.org JSON-LD output
- * Version: 1.0.5
+ * Version: 1.0.6
  * Requires PHP: 8.1
  * Requires at least: 6.0
  * Author: Vibe Architect
@@ -27,7 +27,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Plugin constants
-define('VIBE_AI_VERSION', '1.0.5');
+define('VIBE_AI_VERSION', '1.0.6');
 define('VIBE_AI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('VIBE_AI_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('VIBE_AI_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -64,6 +64,21 @@ if (!file_exists($autoload_file)) {
 
 // Load Composer autoloader
 require_once $autoload_file;
+
+/**
+ * Register Action Scheduler cron schedule early
+ * This prevents "invalid_schedule" errors when WP-Cron reschedules the action_scheduler_run_queue event
+ * The schedule must be registered before WP-Cron attempts to validate it
+ */
+add_filter('cron_schedules', function ($schedules) {
+    if (!isset($schedules['every_minute'])) {
+        $schedules['every_minute'] = [
+            'interval' => 60,
+            'display'  => __('Every minute', 'ai-entity-index'),
+        ];
+    }
+    return $schedules;
+}, 1);
 
 /**
  * Initialize Action Scheduler

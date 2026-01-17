@@ -43,6 +43,9 @@ class Config
     /** @var string Default AI model for entity extraction (Claude Opus 4.5 via OpenRouter) */
     public const DEFAULT_MODEL = 'anthropic/claude-opus-4.5';
 
+    /** @var string Legacy alias for extraction model */
+    public const DEFAULT_ENTITY_EXTRACTION_MODEL = self::DEFAULT_MODEL;
+
     /** @var string Fallback model when primary is unavailable */
     public const FALLBACK_MODEL = 'anthropic/claude-opus-4.5';
 
@@ -160,16 +163,16 @@ class Config
 
     /** @var array<string, string> Internal type to Schema.org type mapping */
     public const TYPE_MAPPING = [
-        'PERSON'   => 'Person',
-        'ORG'      => 'Organization',
-        'COMPANY'  => 'Corporation',
+        'PERSON' => 'Person',
+        'ORG' => 'Organization',
+        'COMPANY' => 'Corporation',
         'LOCATION' => 'Place',
-        'COUNTRY'  => 'Country',
-        'PRODUCT'  => 'Product',
+        'COUNTRY' => 'Country',
+        'PRODUCT' => 'Product',
         'SOFTWARE' => 'SoftwareApplication',
-        'EVENT'    => 'Event',
-        'WORK'     => 'CreativeWork',
-        'CONCEPT'  => 'Thing',
+        'EVENT' => 'Event',
+        'WORK' => 'CreativeWork',
+        'CONCEPT' => 'Thing',
     ];
 
     /** @var array<string> Valid entity types */
@@ -201,12 +204,12 @@ class Config
 
     /** @var array<string, string> Pipeline phase definitions */
     public const PIPELINE_PHASES = [
-        'preparation'   => 'Collect post IDs, strip HTML to plain text',
-        'extraction'    => 'Send content to AI, parse entity JSON response',
+        'preparation' => 'Collect post IDs, strip HTML to plain text',
+        'extraction' => 'Send content to AI, parse entity JSON response',
         'deduplication' => 'Resolve aliases, merge duplicates, normalize names',
-        'linking'       => 'Create mention records connecting entities to posts',
-        'indexing'      => 'Update entity counts, build reverse index',
-        'schema_build'  => 'Generate JSON-LD blobs, cache in post_meta',
+        'linking' => 'Create mention records connecting entities to posts',
+        'indexing' => 'Update entity counts, build reverse index',
+        'schema_build' => 'Generate JSON-LD blobs, cache in post_meta',
     ];
 
     // =================================================================
