@@ -149,25 +149,8 @@ PROMPT;
      */
     public function parse_ai_response($response): array
     {
-        // Handle string input
         if (is_string($response)) {
-            // Fix: Strip markdown code blocks if present (common LLM behavior)
-            $cleaned_response = preg_replace('/^```json\s*|\s*```$/s', '', trim($response));
-            
-            $decoded = json_decode($cleaned_response, true);
-
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                // Initial parse failed, try one more time with original just in case regex failed
-                $decoded = json_decode($response, true);
-                
-                if (json_last_error() !== JSON_ERROR_NONE) {
-                   throw new \RuntimeException(
-                       'Failed to parse AI response JSON: ' . json_last_error_msg()
-                   );
-                }
-            }
-
-            $response = $decoded;
+            $response = $this->decode_json_response($response);
         }
 
         if (!is_array($response)) {
@@ -415,51 +398,67 @@ PROMPT;
      */
     private function get_system_prompt(): string
     {
-        // Security check: Only allow 'manage_options' users or trusted contexts to modify the system prompt.
-        // This prevents other plugins or themes from injecting malicious instructions.
-        if (has_filter('vibe_ai_system_prompt') && !current_user_can('manage_options') && !defined('WP_CLI') && !defined('DOING_CRON')) {
-             return self::SYSTEM_PROMPT;
-        }
+        $prompt = self::SYSTEM_PROMPT;
 
         /**
          * Filter the system prompt used for entity extraction.
          *
          * @param string $prompt The default system prompt.
          */
+        if (has_filter('vibe_ai_system_prompt')) {
+            $allow_override = current_user_can('manage_options')
+                || defined('WP_CLI')
+                || defined('DOING_CRON');
+
+            if ($allow_override) {
+                $prompt = apply_filters('vibe_ai_system_prompt', $prompt);
+            }
+        }
+
         return $prompt;
     }
 
     /**
-     * Parse and validate AI response.
+     * Decode an AI response string into an array.
      *
-     * @param array<string, mixed>|string $response The AI response (JSON string or decoded array).
+     * @param string $response The raw response string.
      *
-     * @return array<int, array<string, mixed>> Array of validated entities.
+     * @return array<string, mixed> The decoded response.
      *
-     * @throws \RuntimeException If response format is invalid.
+     * @throws \RuntimeException If decoding fails.
      */
-    public function parse_ai_response($response): array
+    private function decode_json_response(string $response): array
     {
-        // Handle string input
-        if (is_string($response)) {
-            // Fix: Strip markdown code blocks if present
-            $response = preg_replace('/^```json\s*|\s*```$/', '', trim($response));
+        $cleaned_response = $this->strip_markdown_fences($response);
 
+        $decoded = json_decode($cleaned_response, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
             $decoded = json_decode($response, true);
-
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new \RuntimeException(
-                    'Failed to parse AI response JSON: ' . json_last_error_msg()
-                );
-            }
-
-            $response = $decoded;
         }
 
-        // ... (rest of function remains the same, but for replace_file_content I need the full function body if I am replacing a chunk. 
-        // Wait, replace_file_content replaces a CONTIGUOUS block. I am editing multiple methods here. I should use multi_replace_file_content.
-        // I will cancel this tool call and use multi_replace_file_content instead.)
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            throw new \RuntimeException(
+                'Failed to parse AI response JSON: ' . json_last_error_msg()
+            );
+        }
 
+        return $decoded;
+    }
+
+    /**
+     * Remove common markdown code fences from AI responses.
+     *
+     * @param string $response The raw response string.
+     *
+     * @return string The cleaned response.
+     */
+    private function strip_markdown_fences(string $response): string
+    {
+        $response = trim($response);
+
+        return preg_replace('/^\s*```(?:json)?\s*|\s*```\s*$/i', '', $response);
+    }
 
     /**
      * Get the minimum confidence threshold.
