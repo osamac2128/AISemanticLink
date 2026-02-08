@@ -78,6 +78,7 @@ class DocumentRepository {
         $post_id      = (int) ($data['post_id'] ?? 0);
         $post_type    = sanitize_text_field($data['post_type'] ?? 'post');
         $content_hash = sanitize_text_field($data['content_hash'] ?? '');
+        $url          = esc_url_raw($data['url'] ?? '');
         $title        = sanitize_text_field($data['title'] ?? '');
         $status       = sanitize_text_field($data['status'] ?? 'pending');
         $chunk_count  = (int) ($data['chunk_count'] ?? 0);
@@ -89,12 +90,13 @@ class DocumentRepository {
         $this->wpdb->query(
             $this->wpdb->prepare(
                 "INSERT INTO {$this->table}
-                    (post_id, post_type, content_hash, title, status, chunk_count, created_at, updated_at)
-                 VALUES (%d, %s, %s, %s, %s, %d, NOW(), NOW())
+                    (post_id, post_type, content_hash, title, url, status, chunk_count, created_at, updated_at)
+                 VALUES (%d, %s, %s, %s, %s, %s, %d, NOW(), NOW())
                  ON DUPLICATE KEY UPDATE
                     post_type = VALUES(post_type),
                     content_hash = VALUES(content_hash),
                     title = VALUES(title),
+                    url = VALUES(url),
                     status = VALUES(status),
                     chunk_count = VALUES(chunk_count),
                     updated_at = NOW(),
@@ -103,6 +105,7 @@ class DocumentRepository {
                 $post_type,
                 $content_hash,
                 $title,
+                $url,
                 $status,
                 $chunk_count
             )
@@ -129,7 +132,7 @@ class DocumentRepository {
                     title,
                     status,
                     chunk_count,
-                    indexed_at,
+                    last_indexed_at AS indexed_at,
                     created_at,
                     updated_at
                  FROM {$this->table}
@@ -159,7 +162,7 @@ class DocumentRepository {
                     title,
                     status,
                     chunk_count,
-                    indexed_at,
+                    last_indexed_at AS indexed_at,
                     created_at,
                     updated_at
                  FROM {$this->table}
@@ -232,7 +235,7 @@ class DocumentRepository {
             $this->table,
             [
                 'status'     => 'indexed',
-                'indexed_at' => current_time('mysql'),
+                'last_indexed_at' => current_time('mysql'),
                 'updated_at' => current_time('mysql'),
             ],
             ['id' => $id],
@@ -264,7 +267,7 @@ class DocumentRepository {
                     title,
                     status,
                     chunk_count,
-                    indexed_at,
+                    last_indexed_at AS indexed_at,
                     created_at,
                     updated_at
                  FROM {$this->table}
@@ -302,7 +305,7 @@ class DocumentRepository {
                     d.title,
                     d.status,
                     d.chunk_count,
-                    d.indexed_at,
+                    d.last_indexed_at AS indexed_at,
                     d.created_at,
                     d.updated_at
                  FROM {$this->table} d
@@ -341,7 +344,7 @@ class DocumentRepository {
                     title,
                     status,
                     chunk_count,
-                    indexed_at,
+                    last_indexed_at AS indexed_at,
                     created_at,
                     updated_at
                  FROM {$this->table}
@@ -536,7 +539,7 @@ class DocumentRepository {
         }
 
         // Validate orderby column.
-        $allowed_orderby = ['id', 'post_id', 'post_type', 'title', 'status', 'chunk_count', 'indexed_at', 'created_at', 'updated_at'];
+        $allowed_orderby = ['id', 'post_id', 'post_type', 'title', 'status', 'chunk_count', 'last_indexed_at', 'created_at', 'updated_at'];
         $orderby         = in_array($filters['orderby'] ?? '', $allowed_orderby, true)
             ? $filters['orderby']
             : 'created_at';
@@ -560,7 +563,7 @@ class DocumentRepository {
             title,
             status,
             chunk_count,
-            indexed_at,
+            last_indexed_at AS indexed_at,
             created_at,
             updated_at
          FROM {$this->table}
@@ -620,6 +623,144 @@ class DocumentRepository {
         return (int) $this->wpdb->get_var($query);
     }
 
+    /**
+     * Compatibility wrapper: get document by ID (snake_case).
+     *
+     * @param int $id Document ID.
+     * @return object|null
+     */
+    public function get_by_id(int $id): ?object {
+        return $this->find($id);
+    }
+
+    /**
+     * Compatibility wrapper: get document by post ID (snake_case).
+     *
+     * @param int $postId WordPress post ID.
+     * @return object|null
+     */
+    public function get_by_post_id(int $postId): ?object {
+        return $this->findByPostId($postId);
+    }
+
+    /**
+     * Compatibility wrapper: fetch paginated documents from REST args.
+     *
+     * @param array<string, mixed> $args REST-style query args.
+     * @return array<string, mixed>
+     */
+    public function get_documents(array $args = []): array {
+        $page = (int) ($args['page'] ?? 1);
+        $perPage = (int) ($args['per_page'] ?? 20);
+
+        $orderby = sanitize_text_field((string) ($args['orderby'] ?? 'updated_at'));
+        if ($orderby === 'last_indexed_at') {
+            $orderby = 'last_indexed_at';
+        }
+
+        return $this->getPaginated($page, $perPage, [
+            'search'    => $args['search'] ?? '',
+            'status'    => $args['status'] ?? '',
+            'post_type' => $args['post_type'] ?? '',
+            'orderby'   => $orderby,
+            'order'     => $args['order'] ?? 'DESC',
+        ]);
+    }
+
+    /**
+     * Compatibility wrapper: get REST-formatted stats (snake_case).
+     *
+     * @return array<string, int>
+     */
+    public function get_stats(): array {
+        $stats = $this->getStats();
+
+        return [
+            'total_docs'    => (int) ($stats['total'] ?? 0),
+            'indexed_docs'  => (int) ($stats['indexed'] ?? 0),
+            'pending_docs'  => (int) ($stats['pending'] ?? 0),
+            'excluded_docs' => (int) ($stats['excluded'] ?? 0),
+            'failed_docs'   => (int) ($stats['error'] ?? 0),
+        ];
+    }
+
+    /**
+     * Compatibility helper: get most recent indexed timestamp.
+     *
+     * @return string|null
+     */
+    public function get_last_indexed_at(): ?string {
+        $value = $this->wpdb->get_var(
+            "SELECT MAX(last_indexed_at) FROM {$this->table} WHERE last_indexed_at IS NOT NULL"
+        );
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * Compatibility wrapper: exclude a post from KB (snake_case).
+     *
+     * @param int $postId WordPress post ID.
+     * @return bool
+     */
+    public function exclude_document(int $postId): bool {
+        $document = $this->findByPostId($postId);
+
+        if ($document !== null) {
+            $this->setStatus((int) $document->id, 'excluded');
+            return true;
+        }
+
+        $post = get_post($postId);
+        if (!$post) {
+            return false;
+        }
+
+        $this->upsert([
+            'post_id'      => $postId,
+            'post_type'    => (string) $post->post_type,
+            'content_hash' => '',
+            'title'        => (string) $post->post_title,
+            'url'          => (string) get_permalink($postId),
+            'status'       => 'excluded',
+            'chunk_count'  => 0,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * Compatibility wrapper: include a post in KB (snake_case).
+     *
+     * @param int $postId WordPress post ID.
+     * @return bool
+     */
+    public function include_document(int $postId): bool {
+        $document = $this->findByPostId($postId);
+
+        if ($document !== null) {
+            $this->setStatus((int) $document->id, 'pending');
+            return true;
+        }
+
+        $post = get_post($postId);
+        if (!$post) {
+            return false;
+        }
+
+        $this->upsert([
+            'post_id'      => $postId,
+            'post_type'    => (string) $post->post_type,
+            'content_hash' => '',
+            'title'        => (string) $post->post_title,
+            'url'          => (string) get_permalink($postId),
+            'status'       => 'pending',
+            'chunk_count'  => 0,
+        ]);
+
+        return true;
+    }
+
     // =========================================================================
     // AI Publishing Methods (for LlmsTxt, Sitemap, and Feed generators)
     // =========================================================================
@@ -664,7 +805,7 @@ class DocumentRepository {
         $args = wp_parse_args($args, $defaults);
 
         // Validate orderby
-        $allowed_orderby = ['id', 'post_id', 'title', 'updated_at', 'indexed_at', 'created_at'];
+        $allowed_orderby = ['id', 'post_id', 'title', 'updated_at', 'last_indexed_at', 'created_at'];
         $orderby = in_array($args['orderby'], $allowed_orderby, true) ? $args['orderby'] : 'updated_at';
         $order = strtoupper($args['order']) === 'ASC' ? 'ASC' : 'DESC';
 
@@ -680,7 +821,7 @@ class DocumentRepository {
                     d.content_hash,
                     d.chunk_count,
                     d.updated_at,
-                    d.indexed_at
+                    d.last_indexed_at AS indexed_at
                  FROM {$this->table} d
                  JOIN {$this->wpdb->posts} p ON d.post_id = p.ID
                  WHERE d.status = 'indexed'
@@ -741,7 +882,7 @@ class DocumentRepository {
                     d.title,
                     d.content_hash,
                     d.updated_at,
-                    d.indexed_at,
+                    d.last_indexed_at AS indexed_at,
                     d.created_at
                  FROM {$this->table} d
                  JOIN {$this->wpdb->posts} p ON d.post_id = p.ID

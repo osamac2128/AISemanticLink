@@ -92,7 +92,12 @@ class DocumentBuildJob {
     public function run(int $lastPostId, array $options): void {
         global $wpdb;
 
-        $docsTable = $wpdb->prefix . 'ai_kb_docs';
+        if (get_option('vibe_ai_kb_pipeline_status', 'idle') !== 'running' || (bool) get_option('vibe_ai_kb_pipeline_stop_requested', 0)) {
+            $this->log('info', 'Document build skipped because pipeline is not running');
+            return;
+        }
+
+        $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
 
         $this->log('info', 'Document build phase started', [
             'last_post_id' => $lastPostId,
@@ -158,18 +163,21 @@ class DocumentBuildJob {
                 }
 
                 // Content changed - update
+                $docUrl = get_permalink($postId);
+
                 $wpdb->update(
                     $docsTable,
                     [
-                        'title'        => $post->post_title,
-                        'content'      => $normalizedContent,
-                        'content_hash' => $contentHash,
-                        'status'       => 'pending',
-                        'chunk_count'  => 0,
-                        'updated_at'   => current_time('mysql', true),
+                        'post_type'       => $post->post_type,
+                        'title'           => $post->post_title,
+                        'url'             => is_string($docUrl) ? $docUrl : '',
+                        'content_hash'    => $contentHash,
+                        'status'          => 'pending',
+                        'chunk_count'     => 0,
+                        'last_indexed_at' => null,
                     ],
                     ['id' => $existingDoc->id],
-                    ['%s', '%s', '%s', '%s', '%d', '%s'],
+                    ['%s', '%s', '%s', '%s', '%s', '%d', '%s'],
                     ['%d']
                 );
                 $updatedCount++;
@@ -177,17 +185,19 @@ class DocumentBuildJob {
                 $this->log('debug', "Updated document for post {$postId}");
             } else {
                 // New document - insert
+                $docUrl = get_permalink($postId);
+
                 $wpdb->insert(
                     $docsTable,
                     [
-                        'post_id'      => $postId,
-                        'title'        => $post->post_title,
-                        'content'      => $normalizedContent,
-                        'content_hash' => $contentHash,
-                        'status'       => 'pending',
-                        'chunk_count'  => 0,
-                        'created_at'   => current_time('mysql', true),
-                        'updated_at'   => current_time('mysql', true),
+                        'post_id'         => $postId,
+                        'post_type'       => $post->post_type,
+                        'title'           => $post->post_title,
+                        'url'             => is_string($docUrl) ? $docUrl : '',
+                        'content_hash'    => $contentHash,
+                        'chunk_count'     => 0,
+                        'status'          => 'pending',
+                        'last_indexed_at' => null,
                     ],
                     ['%d', '%s', '%s', '%s', '%s', '%d', '%s', '%s']
                 );

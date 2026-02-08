@@ -20,6 +20,21 @@ use Vibe\AIIndex\Services\Exceptions\RateLimitException;
 class EmbeddingClient
 {
     /**
+     * Circuit breaker option key.
+     */
+    private const CIRCUIT_OPTION = 'vibe_ai_embedding_circuit';
+
+    /**
+     * Circuit breaker opens after this many consecutive failures.
+     */
+    private const CIRCUIT_FAILURE_THRESHOLD = 5;
+
+    /**
+     * Circuit breaker cool-off period in seconds.
+     */
+    private const CIRCUIT_COOLDOWN_SECONDS = 300;
+
+    /**
      * OpenRouter API base URL.
      */
     private string $baseUrl = 'https://openrouter.ai/api/v1';
@@ -120,6 +135,8 @@ class EmbeddingClient
             throw new \InvalidArgumentException('Text array cannot be empty');
         }
 
+        $this->guardCircuit();
+
         $model = $model ?? Config::KB_EMBEDDING_MODEL;
         $lastException = null;
 
@@ -167,6 +184,8 @@ class EmbeddingClient
                     'prompt_tokens' => $usage['prompt_tokens'],
                 ]);
 
+                $this->recordCircuitSuccess();
+
                 return [
                     'embeddings' => $embeddings,
                     'model' => $model,
@@ -175,6 +194,7 @@ class EmbeddingClient
                 ];
             } catch (RateLimitException $e) {
                 $lastException = $e;
+                $this->recordCircuitFailure($e->getMessage());
 
                 $this->logger->warning('Rate limit hit during embedding', [
                     'attempt' => $attempt,
@@ -186,6 +206,7 @@ class EmbeddingClient
                 }
             } catch (\Exception $e) {
                 $lastException = $e;
+                $this->recordCircuitFailure($e->getMessage());
 
                 $this->logger->warning('Embedding request failed', [
                     'attempt' => $attempt,
@@ -389,5 +410,61 @@ class EmbeddingClient
     protected function sleep(int $seconds): void
     {
         sleep($seconds);
+    }
+
+    /**
+     * Prevent requests while circuit breaker is open.
+     *
+     * @return void
+     */
+    private function guardCircuit(): void
+    {
+        $state = get_option(self::CIRCUIT_OPTION, []);
+        if (!is_array($state) || empty($state['open_until'])) {
+            return;
+        }
+
+        if ((int) $state['open_until'] > time()) {
+            throw new \RuntimeException('Embedding circuit breaker is open; retry later');
+        }
+
+        delete_option(self::CIRCUIT_OPTION);
+    }
+
+    /**
+     * Record a successful embedding call.
+     *
+     * @return void
+     */
+    private function recordCircuitSuccess(): void
+    {
+        delete_option(self::CIRCUIT_OPTION);
+    }
+
+    /**
+     * Record a failed embedding call.
+     *
+     * @param string $reason Failure reason.
+     * @return void
+     */
+    private function recordCircuitFailure(string $reason): void
+    {
+        $state = get_option(self::CIRCUIT_OPTION, []);
+        if (!is_array($state)) {
+            $state = [];
+        }
+
+        $failures = (int) ($state['failures'] ?? 0) + 1;
+        $next = [
+            'failures' => $failures,
+            'last_error' => sanitize_text_field($reason),
+            'updated_at' => time(),
+        ];
+
+        if ($failures >= self::CIRCUIT_FAILURE_THRESHOLD) {
+            $next['open_until'] = time() + self::CIRCUIT_COOLDOWN_SECONDS;
+        }
+
+        update_option(self::CIRCUIT_OPTION, $next, false);
     }
 }

@@ -5,6 +5,7 @@
 # Build artifacts
 /admin/js/build/
 /build/
+/build_temp/
 
 # Ignore build temp but keep dist for releases
 !/dist/

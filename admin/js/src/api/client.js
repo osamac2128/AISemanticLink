@@ -28,8 +28,7 @@ async function apiFetch(endpoint, options = {}) {
   const url = `${config.apiUrl}${endpoint}`;
 
   if (!config.nonce) {
-    console.error('CRITICAL: VibeAiData Nonce is MISSING!', window.vibeAiData);
-    // alert('VibeAI Error: Nonce missing. Please report this.');
+    throw new Error('Security nonce is missing for API request');
   }
 
   /* 
@@ -47,9 +46,6 @@ async function apiFetch(endpoint, options = {}) {
     headers['Content-Type'] = 'application/json';
   }
 
-  // Use console.error to ensure visibility in user's filters
-  console.log(`[DEBUG] API Request: ${endpoint}`, { headers, config });
-
   const response = await fetch(url, {
     ...options,
     headers,
@@ -61,11 +57,6 @@ async function apiFetch(endpoint, options = {}) {
   const isJson = contentType && contentType.includes('application/json');
 
   if (!response.ok) {
-    if (response.status === 403) {
-      console.error('CRITICAL: 403 Forbidden. Headers sent:', headers);
-      console.error('Window VibeData:', window.vibeAiData);
-    }
-
     let errorMessage = `API Error: ${response.status} ${response.statusText}`;
 
     if (isJson) {

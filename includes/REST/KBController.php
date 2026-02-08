@@ -224,6 +224,28 @@ class KBController
             ],
         ]);
 
+        register_rest_route(self::NAMESPACE, '/' . self::BASE . '/docs/exclude', [
+            [
+                'methods'             => WP_REST_Server::CREATABLE,
+                'callback'            => [$this, 'exclude_documents_bulk'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+                'args'                => [
+                    'post_ids' => [
+                        'description'       => __('Array of post IDs to update.', 'ai-entity-index'),
+                        'type'              => 'array',
+                        'required'          => true,
+                        'items'             => ['type' => 'integer'],
+                        'sanitize_callback' => [$this, 'sanitize_integer_array'],
+                    ],
+                    'exclude' => [
+                        'description' => __('Whether to exclude (true) or include (false).', 'ai-entity-index'),
+                        'type'        => 'boolean',
+                        'default'     => true,
+                    ],
+                ],
+            ],
+        ]);
+
         // =================================================================
         // Single Document Endpoint
         // =================================================================
@@ -799,10 +821,8 @@ class KBController
         try {
             // Initialize similarity search
             $similaritySearch = new SimilaritySearch(
-                $this->get_vector_repository(),
-                $this->get_chunk_repository(),
-                $this->get_document_repository(),
-                new EmbeddingClient()
+                new EmbeddingClient(),
+                $this->get_vector_repository()->getStore()
             );
 
             // Execute search
@@ -814,18 +834,18 @@ class KBController
             // Format results
             $results = array_map(function ($result) {
                 return [
-                    'chunk_id'       => (int) $result->chunk_id,
-                    'post_id'        => (int) $result->post_id,
-                    'doc_id'         => (int) $result->doc_id,
-                    'title'          => $result->title,
-                    'url'            => $result->url,
-                    'anchor'         => $result->anchor,
-                    'heading_path'   => $result->heading_path ?? [],
-                    'chunk_text'     => $result->chunk_text,
-                    'score'          => round((float) $result->score, 4),
-                    'token_estimate' => (int) $result->token_estimate,
+                    'chunk_id'       => (int) ($result['chunk_id'] ?? 0),
+                    'post_id'        => (int) ($result['post_id'] ?? 0),
+                    'doc_id'         => (int) ($result['doc_id'] ?? 0),
+                    'title'          => (string) ($result['title'] ?? ''),
+                    'url'            => (string) ($result['url'] ?? ''),
+                    'anchor'         => (string) ($result['anchor'] ?? ''),
+                    'heading_path'   => is_array($result['heading_path'] ?? null) ? $result['heading_path'] : [],
+                    'chunk_text'     => (string) ($result['chunk_text'] ?? ''),
+                    'score'          => round((float) ($result['score'] ?? 0), 4),
+                    'token_estimate' => (int) ($result['token_estimate'] ?? 0),
                 ];
-            }, $searchResults->results);
+            }, $searchResults);
 
             $this->logger->info('KB semantic search performed', [
                 'query_length'  => mb_strlen($query),
@@ -838,7 +858,7 @@ class KBController
                 'results'       => $results,
                 'query'         => $query,
                 'top_k'         => $topK,
-                'total_scanned' => $searchResults->total_scanned,
+                'total_scanned' => count($searchResults),
                 'query_time_ms' => $queryTimeMs,
             ]);
 
@@ -883,6 +903,7 @@ class KBController
             'kb_enabled' => $this->is_kb_enabled(),
             'pipeline'   => [
                 'status'        => $pipelineStatus['status'],
+                'running'       => ($pipelineStatus['status'] ?? 'idle') === 'running',
                 'current_phase' => $pipelineStatus['current_phase'] ?? null,
                 'progress'      => [
                     'total'      => $pipelineStatus['progress']['total'] ?? 0,
@@ -1096,6 +1117,65 @@ class KBController
             'success'  => true,
             'message'  => __('Document included in Knowledge Base. It will be indexed on next pipeline run.', 'ai-entity-index'),
             'document' => $document ? $this->format_document_response($document) : null,
+        ]);
+    }
+
+    /**
+     * POST /kb/docs/exclude
+     * Bulk include or exclude documents.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response|WP_Error The response object or error.
+     */
+    public function exclude_documents_bulk(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $postIds = $request->get_param('post_ids') ?? [];
+        $exclude = (bool) $request->get_param('exclude');
+
+        if (!is_array($postIds) || empty($postIds)) {
+            return new WP_Error(
+                'rest_invalid_param',
+                __('post_ids must be a non-empty array of post IDs.', 'ai-entity-index'),
+                ['status' => 400]
+            );
+        }
+
+        $docRepo = $this->get_document_repository();
+        $updated = [];
+        $failed = [];
+
+        foreach ($postIds as $postId) {
+            $id = (int) $postId;
+
+            if ($id <= 0 || !get_post($id)) {
+                $failed[] = $id;
+                continue;
+            }
+
+            $ok = $exclude
+                ? $docRepo->exclude_document($id)
+                : $docRepo->include_document($id);
+
+            if ($ok) {
+                $updated[] = $id;
+            } else {
+                $failed[] = $id;
+            }
+        }
+
+        $this->logger->info('Bulk KB document include/exclude processed', [
+            'exclude' => $exclude,
+            'updated' => count($updated),
+            'failed'  => count($failed),
+        ]);
+
+        return rest_ensure_response([
+            'success'        => empty($failed),
+            'exclude'        => $exclude,
+            'updated_post_ids' => $updated,
+            'failed_post_ids'  => $failed,
+            'updated_count'    => count($updated),
+            'failed_count'     => count($failed),
         ]);
     }
 
@@ -1752,10 +1832,10 @@ class KBController
             'post_id'         => (int) $document->post_id,
             'post_type'       => $document->post_type,
             'title'           => $document->title,
-            'url'             => $document->url,
+            'url'             => $document->url ?? get_permalink((int) $document->post_id),
             'status'          => $document->status,
             'chunk_count'     => (int) ($document->chunk_count ?? 0),
-            'last_indexed_at' => $document->last_indexed_at,
+            'last_indexed_at' => $document->last_indexed_at ?? ($document->indexed_at ?? null),
             'created_at'      => $document->created_at,
         ];
 

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Jobs\KB;
 
+use Vibe\AIIndex\Config;
+
 /**
  * KB Phase 5: Remove stale chunks and orphaned data.
  *
@@ -72,9 +74,14 @@ class CleanupJob {
     public function run(): void {
         global $wpdb;
 
-        $docsTable = $wpdb->prefix . 'ai_kb_docs';
-        $chunksTable = $wpdb->prefix . 'ai_kb_chunks';
-        $vectorsTable = $wpdb->prefix . 'ai_kb_vectors';
+        if (get_option('vibe_ai_kb_pipeline_status', 'idle') !== 'running' || (bool) get_option('vibe_ai_kb_pipeline_stop_requested', 0)) {
+            $this->log('info', 'Cleanup skipped because pipeline is not running');
+            return;
+        }
+
+        $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $chunksTable = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $vectorsTable = $wpdb->prefix . Config::TABLE_KB_VECTORS;
 
         $this->log('info', 'Cleanup phase started');
 
@@ -171,7 +178,7 @@ class CleanupJob {
     private function cleanupExcludedPosts(): int {
         global $wpdb;
 
-        $docsTable = $wpdb->prefix . 'ai_kb_docs';
+        $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
 
         // Find docs where the post now has the exclusion meta
         $excludedDocs = $wpdb->get_col(
@@ -189,7 +196,7 @@ class CleanupJob {
 
         // Delete associated chunks first
         $wpdb->query(
-            "DELETE FROM {$wpdb->prefix}ai_kb_chunks WHERE doc_id IN ({$docIds})"
+            "DELETE FROM {$wpdb->prefix}" . Config::TABLE_KB_CHUNKS . " WHERE doc_id IN ({$docIds})"
         );
 
         // Delete docs
@@ -212,9 +219,9 @@ class CleanupJob {
     private function calculateStatistics(): array {
         global $wpdb;
 
-        $docsTable = $wpdb->prefix . 'ai_kb_docs';
-        $chunksTable = $wpdb->prefix . 'ai_kb_chunks';
-        $vectorsTable = $wpdb->prefix . 'ai_kb_vectors';
+        $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $chunksTable = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $vectorsTable = $wpdb->prefix . Config::TABLE_KB_VECTORS;
 
         // Total documents
         $totalDocs = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$docsTable}");
@@ -236,7 +243,7 @@ class CleanupJob {
 
         // Total token count (estimated)
         $totalTokens = (int) $wpdb->get_var(
-            "SELECT COALESCE(SUM(token_count), 0) FROM {$chunksTable}"
+            "SELECT COALESCE(SUM(token_estimate), 0) FROM {$chunksTable}"
         );
 
         // Indexed documents count
@@ -258,9 +265,9 @@ class CleanupJob {
 
         // Vector model info
         $vectorModel = $wpdb->get_row(
-            "SELECT model, dimensions, COUNT(*) as count
+            "SELECT model, dims, COUNT(*) as count
              FROM {$vectorsTable}
-             GROUP BY model, dimensions
+             GROUP BY model, dims
              ORDER BY count DESC
              LIMIT 1"
         );
@@ -277,7 +284,7 @@ class CleanupJob {
             'coverage'          => $coverage,
             'last_indexed_at'   => $lastIndexed,
             'vector_model'      => $vectorModel ? $vectorModel->model : null,
-            'vector_dimensions' => $vectorModel ? (int) $vectorModel->dimensions : null,
+            'vector_dimensions' => $vectorModel ? (int) $vectorModel->dims : null,
             'calculated_at'     => current_time('mysql', true),
         ];
     }
@@ -291,9 +298,9 @@ class CleanupJob {
         global $wpdb;
 
         $tables = [
-            $wpdb->prefix . 'ai_kb_docs',
-            $wpdb->prefix . 'ai_kb_chunks',
-            $wpdb->prefix . 'ai_kb_vectors',
+            $wpdb->prefix . Config::TABLE_KB_DOCS,
+            $wpdb->prefix . Config::TABLE_KB_CHUNKS,
+            $wpdb->prefix . Config::TABLE_KB_VECTORS,
         ];
 
         foreach ($tables as $table) {

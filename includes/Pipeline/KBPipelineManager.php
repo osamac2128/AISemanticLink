@@ -64,6 +64,11 @@ class KBPipelineManager {
     private const OPTION_LAST_ACTIVITY = 'vibe_ai_kb_pipeline_last_activity';
 
     /**
+     * Stop-request flag option key.
+     */
+    private const OPTION_STOP_REQUESTED = 'vibe_ai_kb_pipeline_stop_requested';
+
+    /**
      * Pipeline phases in order.
      */
     public const PHASES = [
@@ -181,6 +186,8 @@ class KBPipelineManager {
             throw new \RuntimeException('KB Pipeline is already running. Stop it first before starting a new run.');
         }
 
+        delete_option(self::OPTION_STOP_REQUESTED);
+
         // Apply filter for indexable post types
         $default_post_types = apply_filters('vibe_ai_kb_post_types', ['post', 'page']);
 
@@ -236,6 +243,8 @@ class KBPipelineManager {
      * @return void
      */
     public function stop(): void {
+        update_option(self::OPTION_STOP_REQUESTED, 1, false);
+
         // Cancel all scheduled pipeline jobs
         $this->cancelPendingJobs();
 
@@ -496,6 +505,19 @@ class KBPipelineManager {
             return;
         }
 
+        if (function_exists('as_next_scheduled_action')) {
+            $existing = as_next_scheduled_action(
+                'vibe_ai_kb_index_single_post',
+                ['post_id' => $postId],
+                self::SCHEDULER_GROUP
+            );
+
+            if ($existing) {
+                $this->log('debug', 'Skipping duplicate post schedule', ['post_id' => $postId]);
+                return;
+            }
+        }
+
         // Schedule a single-post indexing job
         as_schedule_single_action(
             time() + 30, // Small delay to batch rapid saves
@@ -534,9 +556,9 @@ class KBPipelineManager {
     public function getStats(): array {
         global $wpdb;
 
-        $docs_table    = $wpdb->prefix . 'ai_kb_documents';
-        $chunks_table  = $wpdb->prefix . 'ai_kb_chunks';
-        $vectors_table = $wpdb->prefix . 'ai_kb_vectors';
+        $docs_table    = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $chunks_table  = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $vectors_table = $wpdb->prefix . Config::TABLE_KB_VECTORS;
 
         // Initialize default stats
         $stats = [
@@ -667,6 +689,47 @@ class KBPipelineManager {
     }
 
     /**
+     * Check whether a stop was requested.
+     *
+     * @return bool
+     */
+    public function shouldStop(): bool {
+        return (bool) get_option(self::OPTION_STOP_REQUESTED, 0);
+    }
+
+    /**
+     * Compatibility wrapper: get status (snake_case).
+     *
+     * @return array<string, mixed>
+     */
+    public function get_status(): array {
+        return $this->getStatus();
+    }
+
+    /**
+     * Compatibility wrapper: check running state (snake_case).
+     *
+     * @return bool
+     */
+    public function is_running(): bool {
+        return $this->isRunning();
+    }
+
+    /**
+     * Compatibility wrapper: reindex single post (snake_case).
+     *
+     * @param int $postId Post ID.
+     * @return void
+     */
+    public function reindex_single(int $postId): void {
+        $this->start([
+            'scope'   => 'post_id',
+            'post_id' => $postId,
+            'force'   => true,
+        ]);
+    }
+
+    /**
      * Get the phase index from phase name.
      *
      * @param string $phase Phase name.
@@ -691,6 +754,14 @@ class KBPipelineManager {
         }
 
         $hook = "vibe_ai_{$phase}";
+
+        if (function_exists('as_next_scheduled_action')) {
+            $existing = as_next_scheduled_action($hook, ['config' => $args], self::SCHEDULER_GROUP);
+            if ($existing) {
+                $this->log('debug', 'Skipping duplicate phase schedule', ['phase' => $phase]);
+                return;
+            }
+        }
 
         // Schedule using Action Scheduler
         as_schedule_single_action(

@@ -19,6 +19,31 @@ use Vibe\AIIndex\Services\Exceptions\RateLimitException;
 class AIClient
 {
     /**
+     * Maximum input characters accepted for extraction.
+     */
+    private const MAX_INPUT_CHARS = 120000;
+
+    /**
+     * Timeout in seconds for API requests.
+     */
+    private const REQUEST_TIMEOUT = 30;
+
+    /**
+     * Circuit breaker option key.
+     */
+    private const CIRCUIT_OPTION = 'vibe_ai_openrouter_circuit';
+
+    /**
+     * Circuit breaker opens after this many consecutive failures.
+     */
+    private const CIRCUIT_FAILURE_THRESHOLD = 5;
+
+    /**
+     * Circuit breaker cool-off period in seconds.
+     */
+    private const CIRCUIT_COOLDOWN_SECONDS = 300;
+
+    /**
      * OpenRouter API endpoint.
      */
     private const API_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
@@ -119,6 +144,16 @@ class AIClient
      */
     public function extract(string $content, string $system_prompt, ?string $model = null): array
     {
+        $this->guardCircuit();
+
+        if (trim($content) === '') {
+            throw new \InvalidArgumentException('Content cannot be empty');
+        }
+
+        if (strlen($content) > self::MAX_INPUT_CHARS) {
+            throw new \InvalidArgumentException('Content too large for extraction request');
+        }
+
         $model = $model ?? self::DEFAULT_MODEL;
         $last_exception = null;
 
@@ -127,10 +162,13 @@ class AIClient
                 $this->checkRateLimit();
 
                 $response = $this->makeRequest($content, $system_prompt, $model);
+                $parsed = $this->parseResponse($response);
+                $this->recordCircuitSuccess();
 
-                return $this->parseResponse($response);
+                return $parsed;
             } catch (RateLimitException $e) {
                 $last_exception = $e;
+                $this->recordCircuitFailure($e->getMessage());
 
                 if ($attempt < self::MAX_RETRIES) {
                     $delay = $this->calculateBackoffDelay($attempt);
@@ -138,6 +176,7 @@ class AIClient
                 }
             } catch (\Exception $e) {
                 $last_exception = $e;
+                $this->recordCircuitFailure($e->getMessage());
 
                 if ($attempt < self::MAX_RETRIES) {
                     $delay = $this->calculateBackoffDelay($attempt);
@@ -203,7 +242,7 @@ class AIClient
                 'X-Title' => 'AI Entity Index',
             ],
             'body' => wp_json_encode($body),
-            'timeout' => 15,
+            'timeout' => self::REQUEST_TIMEOUT,
             'sslverify' => true,
         ];
 
@@ -334,6 +373,63 @@ class AIClient
     protected function sleep(int $seconds): void
     {
         sleep($seconds);
+    }
+
+    /**
+     * Prevent requests while circuit breaker is open.
+     *
+     * @return void
+     */
+    private function guardCircuit(): void
+    {
+        $state = get_option(self::CIRCUIT_OPTION, []);
+        if (!is_array($state) || empty($state['open_until'])) {
+            return;
+        }
+
+        $openUntil = (int) $state['open_until'];
+        if ($openUntil > time()) {
+            throw new \RuntimeException('OpenRouter circuit breaker is open; retry later');
+        }
+
+        delete_option(self::CIRCUIT_OPTION);
+    }
+
+    /**
+     * Record a successful call for circuit breaker state.
+     *
+     * @return void
+     */
+    private function recordCircuitSuccess(): void
+    {
+        delete_option(self::CIRCUIT_OPTION);
+    }
+
+    /**
+     * Record a failed call for circuit breaker state.
+     *
+     * @param string $reason Failure reason.
+     * @return void
+     */
+    private function recordCircuitFailure(string $reason): void
+    {
+        $state = get_option(self::CIRCUIT_OPTION, []);
+        if (!is_array($state)) {
+            $state = [];
+        }
+
+        $failures = (int) ($state['failures'] ?? 0) + 1;
+        $next = [
+            'failures' => $failures,
+            'last_error' => sanitize_text_field($reason),
+            'updated_at' => time(),
+        ];
+
+        if ($failures >= self::CIRCUIT_FAILURE_THRESHOLD) {
+            $next['open_until'] = time() + self::CIRCUIT_COOLDOWN_SECONDS;
+        }
+
+        update_option(self::CIRCUIT_OPTION, $next, false);
     }
 
     /**

@@ -269,6 +269,14 @@ class RestController
             ],
         ]);
 
+        register_rest_route($this->namespace, '/pipeline/status', [
+            [
+                'methods' => WP_REST_Server::READABLE,
+                'callback' => [$this, 'get_status'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+            ],
+        ]);
+
         // =================================================================
         // Logs Endpoint
         // =================================================================

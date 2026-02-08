@@ -110,8 +110,13 @@ class EmbedChunksJob {
     public function run(int $lastChunkId): void {
         global $wpdb;
 
-        $chunksTable = $wpdb->prefix . 'ai_kb_chunks';
-        $vectorsTable = $wpdb->prefix . 'ai_kb_vectors';
+        if (get_option('vibe_ai_kb_pipeline_status', 'idle') !== 'running' || (bool) get_option('vibe_ai_kb_pipeline_stop_requested', 0)) {
+            $this->log('info', 'Embed chunks skipped because pipeline is not running');
+            return;
+        }
+
+        $chunksTable = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $vectorsTable = $wpdb->prefix . Config::TABLE_KB_VECTORS;
 
         $this->log('info', 'Embed chunks phase started', [
             'last_chunk_id' => $lastChunkId,
@@ -152,7 +157,8 @@ class EmbedChunksJob {
         $maxChunkId = max($chunkIds);
 
         // Call embedding API
-        $embeddings = $this->generateEmbeddings($chunkTexts);
+        $embeddingResult = $this->generateEmbeddings($chunkTexts);
+        $embeddings = $embeddingResult['embeddings'] ?? [];
 
         if (empty($embeddings)) {
             $this->log('error', 'Failed to generate embeddings for batch');
@@ -170,25 +176,32 @@ class EmbedChunksJob {
         }
 
         // Get model metadata
-        $model = $this->getEmbeddingModel();
-        $dims = $this->getEmbeddingDimensions();
+        $provider = (string) ($embeddingResult['provider'] ?? $this->getEmbeddingProvider());
+        $model = (string) ($embeddingResult['model'] ?? $this->getEmbeddingModel());
+        $dims = (int) ($embeddingResult['dims'] ?? 0);
 
         // Store vectors
         $storedCount = 0;
         foreach ($chunks as $index => $chunk) {
             $embedding = $embeddings[$index];
+            if (!is_array($embedding) || empty($embedding)) {
+                continue;
+            }
 
-            // Serialize embedding vector for storage
-            $vectorBlob = pack('f*', ...$embedding);
+            if ($dims <= 0) {
+                $dims = count($embedding);
+            }
+
+            $vectorPayload = pack('f*', ...$embedding);
 
             $wpdb->insert(
                 $vectorsTable,
                 [
-                    'chunk_id'   => $chunk->id,
-                    'vector'     => $vectorBlob,
-                    'model'      => $model,
-                    'dimensions' => $dims,
-                    'created_at' => current_time('mysql', true),
+                    'chunk_id'        => $chunk->id,
+                    'provider'        => $provider,
+                    'model'           => $model,
+                    'dims'            => $dims,
+                    'vector_payload'  => $vectorPayload,
                 ],
                 ['%d', '%s', '%s', '%d', '%s']
             );
@@ -207,7 +220,7 @@ class EmbedChunksJob {
         $this->log('info', "Embedded {$storedCount} chunks", [
             'last_chunk_id' => $maxChunkId,
             'model'         => $model,
-            'dimensions'    => $dims,
+            'dims'          => $dims,
         ]);
 
         // Fire logging action
@@ -228,13 +241,36 @@ class EmbedChunksJob {
      * @throws RateLimitException When rate limit is exceeded.
      */
     private function generateEmbeddings(array $texts): array {
-        // Check if EmbeddingClient service exists
-        if (class_exists('\\Vibe\\AIIndex\\Services\\KB\\EmbeddingClient')) {
+        if (class_exists('\Vibe\AIIndex\Services\KB\EmbeddingClient')) {
             $client = new \Vibe\AIIndex\Services\KB\EmbeddingClient();
-            return $client->embed($texts);
+            $result = $client->embed($texts, $this->getEmbeddingModel());
+
+            if (isset($result['embeddings']) && is_array($result['embeddings'])) {
+                return [
+                    'embeddings' => array_values($result['embeddings']),
+                    'model'      => (string) ($result['model'] ?? $this->getEmbeddingModel()),
+                    'dims'       => (int) ($result['dims'] ?? 0),
+                    'provider'   => 'openrouter',
+                ];
+            }
+
+            if (is_array($result) && !empty($result) && is_array($result[0] ?? null)) {
+                return [
+                    'embeddings' => array_values($result),
+                    'model'      => $this->getEmbeddingModel(),
+                    'dims'       => 0,
+                    'provider'   => 'openrouter',
+                ];
+            }
+
+            return [
+                'embeddings' => [],
+                'model'      => $this->getEmbeddingModel(),
+                'dims'       => 0,
+                'provider'   => 'openrouter',
+            ];
         }
 
-        // Fall back to direct API call
         return $this->callEmbeddingAPI($texts);
     }
 
@@ -308,8 +344,14 @@ class EmbedChunksJob {
 
         // Sort by index to ensure correct order
         ksort($embeddings);
+        $ordered = array_values($embeddings);
 
-        return array_values($embeddings);
+        return [
+            'embeddings' => $ordered,
+            'model'      => (string) ($body['model'] ?? $model),
+            'dims'       => !empty($ordered[0]) ? count($ordered[0]) : 0,
+            'provider'   => 'openai',
+        ];
     }
 
     /**
@@ -319,6 +361,15 @@ class EmbedChunksJob {
      */
     private function getEmbeddingModel(): string {
         return get_option('vibe_ai_kb_embedding_model', self::DEFAULT_EMBEDDING_MODEL);
+    }
+
+    /**
+     * Get embedding provider name.
+     *
+     * @return string Provider identifier.
+     */
+    private function getEmbeddingProvider(): string {
+        return (string) get_option('vibe_ai_kb_embedding_provider', 'openrouter');
     }
 
     /**

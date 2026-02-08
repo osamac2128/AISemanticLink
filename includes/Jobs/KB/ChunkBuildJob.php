@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Jobs\KB;
 
+use Vibe\AIIndex\Config;
+
 /**
  * KB Phase 2: Generate chunks for documents.
  *
@@ -89,8 +91,13 @@ class ChunkBuildJob {
     public function run(int $lastDocId): void {
         global $wpdb;
 
-        $docsTable = $wpdb->prefix . 'ai_kb_docs';
-        $chunksTable = $wpdb->prefix . 'ai_kb_chunks';
+        if (get_option('vibe_ai_kb_pipeline_status', 'idle') !== 'running' || (bool) get_option('vibe_ai_kb_pipeline_stop_requested', 0)) {
+            $this->log('info', 'Chunk build skipped because pipeline is not running');
+            return;
+        }
+
+        $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $chunksTable = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
 
         $this->log('info', 'Chunk build phase started', [
             'last_doc_id' => $lastDocId,
@@ -98,11 +105,12 @@ class ChunkBuildJob {
 
         // Get pending documents
         $docs = $wpdb->get_results($wpdb->prepare(
-            "SELECT id, post_id, title, content
-             FROM {$docsTable}
-             WHERE status = 'pending'
-             AND id > %d
-             ORDER BY id ASC
+            "SELECT d.id, d.post_id, d.title, p.post_content
+             FROM {$docsTable} d
+             INNER JOIN {$wpdb->posts} p ON d.post_id = p.ID
+             WHERE d.status = 'pending'
+             AND d.id > %d
+             ORDER BY d.id ASC
              LIMIT %d",
             $lastDocId,
             self::BATCH_SIZE
@@ -127,8 +135,15 @@ class ChunkBuildJob {
             // Delete existing chunks for this doc (in case of re-indexing)
             $wpdb->delete($chunksTable, ['doc_id' => $docId], ['%d']);
 
-            // Generate chunks
-            $chunks = $this->generateChunks($doc->content, $doc->title);
+            // Generate chunks from current post content
+            $content = trim(wp_strip_all_tags((string) $doc->post_content));
+            if ($content === '') {
+                $this->log('warning', "No content available for doc {$docId}");
+                continue;
+            }
+
+            $fullContent = trim((string) $doc->title . "\n\n" . $content);
+            $chunks = $this->generateChunks($fullContent, (string) $doc->title);
 
             if (empty($chunks)) {
                 $this->log('warning', "No chunks generated for doc {$docId}");
@@ -137,19 +152,30 @@ class ChunkBuildJob {
 
             // Insert chunks
             $chunkIndex = 0;
+            $offsetCursor = 0;
             foreach ($chunks as $chunkText) {
+                $chunkLength = mb_strlen($chunkText);
+                $startOffset = $offsetCursor;
+                $endOffset = $startOffset + max(0, $chunkLength - 1);
+
                 $wpdb->insert(
                     $chunksTable,
                     [
-                        'doc_id'      => $docId,
-                        'chunk_index' => $chunkIndex,
-                        'chunk_text'  => $chunkText,
-                        'token_count' => $this->estimateTokenCount($chunkText),
-                        'created_at'  => current_time('mysql', true),
+                        'doc_id'            => $docId,
+                        'chunk_index'       => $chunkIndex,
+                        'anchor'            => 'chunk-' . ($chunkIndex + 1),
+                        'heading_path_json' => wp_json_encode([]),
+                        'chunk_text'        => $chunkText,
+                        'chunk_hash'        => hash('sha256', $chunkText),
+                        'start_offset'      => $startOffset,
+                        'end_offset'        => $endOffset,
+                        'token_estimate'    => $this->estimateTokenCount($chunkText),
                     ],
-                    ['%d', '%d', '%s', '%d', '%s']
+                    ['%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d']
                 );
+
                 $chunkIndex++;
+                $offsetCursor = max(0, $endOffset - self::DEFAULT_CHUNK_OVERLAP + 1);
             }
 
             // Update doc chunk count and status
@@ -158,10 +184,9 @@ class ChunkBuildJob {
                 [
                     'chunk_count' => count($chunks),
                     'status'      => 'chunked',
-                    'updated_at'  => current_time('mysql', true),
                 ],
                 ['id' => $docId],
-                ['%d', '%s', '%s'],
+                ['%d', '%s'],
                 ['%d']
             );
 

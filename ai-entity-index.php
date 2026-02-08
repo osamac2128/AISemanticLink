@@ -8,8 +8,8 @@
  * Requires at least: 6.0
  * Author: Vibe Architect
  * Author URI: https://vibeai.dev
- * License: GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * License: Proprietary
+ * License URI: LICENSE
  * Text Domain: ai-entity-index
  * Domain Path: /languages
  *

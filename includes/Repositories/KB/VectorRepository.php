@@ -87,14 +87,16 @@ class VectorRepository {
         $this->wpdb->query(
             $this->wpdb->prepare(
                 "INSERT INTO {$this->table}
-                    (chunk_id, vector, model, dims, created_at)
-                 VALUES (%d, %s, %s, %d, NOW())
+                    (chunk_id, provider, vector_payload, model, dims, created_at)
+                 VALUES (%d, %s, %s, %s, %d, NOW())
                  ON DUPLICATE KEY UPDATE
-                    vector = VALUES(vector),
+                    provider = VALUES(provider),
+                    vector_payload = VALUES(vector_payload),
                     model = VALUES(model),
                     dims = VALUES(dims),
                     created_at = NOW()",
                 $chunkId,
+                'openrouter',
                 $vector_blob,
                 sanitize_text_field($model),
                 $dims
@@ -295,7 +297,7 @@ class VectorRepository {
     public function getVector(int $chunkId): ?array {
         $result = $this->wpdb->get_var(
             $this->wpdb->prepare(
-                "SELECT vector FROM {$this->table} WHERE chunk_id = %d",
+                "SELECT vector_payload FROM {$this->table} WHERE chunk_id = %d",
                 $chunkId
             )
         );
@@ -324,14 +326,14 @@ class VectorRepository {
 
         $results = $this->wpdb->get_results(
             $this->wpdb->prepare(
-                "SELECT chunk_id, vector FROM {$this->table} WHERE chunk_id IN ({$placeholders})",
+                "SELECT chunk_id, vector_payload FROM {$this->table} WHERE chunk_id IN ({$placeholders})",
                 ...$chunkIds
             )
         );
 
         $vectors = [];
         foreach ($results as $row) {
-            $vectors[(int) $row->chunk_id] = $this->deserializeVector($row->vector);
+            $vectors[(int) $row->chunk_id] = $this->deserializeVector($row->vector_payload);
         }
 
         return $vectors;
@@ -422,5 +424,37 @@ class VectorRepository {
      */
     public function setStore(VectorStoreInterface $store): void {
         $this->store = $store;
+    }
+
+    /**
+     * Compatibility wrapper: total vector count (snake_case).
+     *
+     * @return int
+     */
+    public function count(): int {
+        return $this->getCount();
+    }
+
+    /**
+     * Compatibility wrapper: get vector row by chunk ID (snake_case).
+     *
+     * @param int $chunkId Chunk ID.
+     * @return object|null
+     */
+    public function get_by_chunk_id(int $chunkId): ?object {
+        $result = $this->wpdb->get_row(
+            $this->wpdb->prepare(
+                "SELECT chunk_id, model, dims, created_at FROM {$this->table} WHERE chunk_id = %d",
+                $chunkId
+            )
+        );
+
+        if (!$result) {
+            return null;
+        }
+
+        $result->provider = 'openrouter';
+
+        return $result;
     }
 }

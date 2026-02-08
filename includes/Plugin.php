@@ -159,11 +159,21 @@ class Plugin
             return;
         }
 
-        // Output pre-sanitized JSON-LD
-        printf(
-            '<script type="application/ld+json">%s</script>' . "\n",
-            $schema
+        $decoded = json_decode((string) $schema, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            return;
+        }
+
+        $safe_json = wp_json_encode(
+            $decoded,
+            JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES
         );
+
+        if ($safe_json === false) {
+            return;
+        }
+
+        printf('<script type="application/ld+json">%s</script>' . "\n", $safe_json);
     }
 
     /**
@@ -194,6 +204,10 @@ class Plugin
 
         // Mark post for extraction (will be picked up by pipeline)
         update_post_meta($post_id, '_vibe_ai_needs_extraction', true);
+
+        // Invalidate schema cache on content changes.
+        delete_post_meta($post_id, Config::META_SCHEMA_CACHE);
+        delete_post_meta($post_id, Config::META_SCHEMA_VERSION);
 
         $this->logger->debug('Post marked for extraction', ['post_id' => $post_id]);
     }
@@ -379,9 +393,6 @@ class Plugin
 
         // Restore to KB on untrash
         add_action('untrash_post', [$this, 'includeInKB']);
-
-        // Register KB REST routes
-        add_action('rest_api_init', [$this, 'registerKBRoutes']);
 
         // Register KB Action Scheduler hooks
         $this->registerKBJobHooks();

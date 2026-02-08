@@ -18,7 +18,7 @@ class Activator
     private const DB_VERSION_OPTION = 'vibe_ai_db_version';
 
     /** @var string Current database schema version */
-    private const DB_VERSION = '1.0.0';
+    private const DB_VERSION = '1.1.0';
 
     /**
      * Plugin activation callback.
@@ -444,8 +444,70 @@ class Activator
         if (version_compare($installed_version, self::DB_VERSION, '<')) {
             self::createTables();
             self::createKBTables();
+            self::migrateKBLegacyColumns();
             update_option(self::DB_VERSION_OPTION, self::DB_VERSION);
         }
+    }
+
+    /**
+     * Ensure KB legacy installs have required columns/indexes.
+     *
+     * @return void
+     */
+    private static function migrateKBLegacyColumns(): void
+    {
+        global $wpdb;
+
+        $kb_docs_table = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $kb_chunks_table = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $kb_vectors_table = $wpdb->prefix . Config::TABLE_KB_VECTORS;
+
+        self::addColumnIfMissing($kb_docs_table, 'last_indexed_at', 'ALTER TABLE ' . $kb_docs_table . ' ADD COLUMN last_indexed_at datetime DEFAULT NULL');
+        self::addColumnIfMissing($kb_chunks_table, 'heading_path_json', 'ALTER TABLE ' . $kb_chunks_table . ' ADD COLUMN heading_path_json text');
+        self::addColumnIfMissing($kb_chunks_table, 'token_estimate', 'ALTER TABLE ' . $kb_chunks_table . ' ADD COLUMN token_estimate int unsigned DEFAULT 0');
+        self::addColumnIfMissing($kb_vectors_table, 'vector_payload', 'ALTER TABLE ' . $kb_vectors_table . ' ADD COLUMN vector_payload longblob NOT NULL');
+        self::addColumnIfMissing($kb_vectors_table, 'dims', 'ALTER TABLE ' . $kb_vectors_table . ' ADD COLUMN dims int unsigned DEFAULT NULL');
+
+        if (self::indexMissing($kb_docs_table, 'idx_last_indexed_at')) {
+            $wpdb->query('ALTER TABLE ' . $kb_docs_table . ' ADD KEY idx_last_indexed_at (last_indexed_at)');
+        }
+
+        if (self::indexMissing($kb_chunks_table, 'idx_doc_chunk_index')) {
+            $wpdb->query('ALTER TABLE ' . $kb_chunks_table . ' ADD KEY idx_doc_chunk_index (doc_id, chunk_index)');
+        }
+    }
+
+    /**
+     * Add a column if it does not exist.
+     *
+     * @param string $table Table name.
+     * @param string $column Column name.
+     * @param string $sql SQL statement to run.
+     * @return void
+     */
+    private static function addColumnIfMissing(string $table, string $column, string $sql): void
+    {
+        global $wpdb;
+
+        $exists = $wpdb->get_var($wpdb->prepare('SHOW COLUMNS FROM ' . $table . ' LIKE %s', $column));
+        if ($exists === null) {
+            $wpdb->query($sql);
+        }
+    }
+
+    /**
+     * Check whether an index is missing.
+     *
+     * @param string $table Table name.
+     * @param string $indexName Index name.
+     * @return bool
+     */
+    private static function indexMissing(string $table, string $indexName): bool
+    {
+        global $wpdb;
+
+        $existing = $wpdb->get_var($wpdb->prepare('SHOW INDEX FROM ' . $table . ' WHERE Key_name = %s', $indexName));
+        return $existing === null;
     }
 
     /**

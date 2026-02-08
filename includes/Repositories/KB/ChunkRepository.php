@@ -102,12 +102,12 @@ class ChunkRepository {
                         'doc_id'         => $docId,
                         'chunk_index'    => $chunk_index,
                         'anchor'         => $anchor,
-                        'heading_path'   => $heading_path_json,
-                        'chunk_text'     => $chunk_text,
-                        'chunk_hash'     => $chunk_hash,
-                        'start_offset'   => $start_offset,
-                        'end_offset'     => $end_offset,
-                        'token_estimate' => $token_estimate,
+                        'heading_path_json' => $heading_path_json,
+                        'chunk_text'        => $chunk_text,
+                        'chunk_hash'        => $chunk_hash,
+                        'start_offset'      => $start_offset,
+                        'end_offset'        => $end_offset,
+                        'token_estimate'    => $token_estimate,
                         'created_at'     => current_time('mysql'),
                     ],
                     ['%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s']
@@ -140,7 +140,7 @@ class ChunkRepository {
                     doc_id,
                     chunk_index,
                     anchor,
-                    heading_path,
+                    heading_path_json AS heading_path,
                     chunk_text,
                     chunk_hash,
                     start_offset,
@@ -176,7 +176,7 @@ class ChunkRepository {
                     doc_id,
                     chunk_index,
                     anchor,
-                    heading_path,
+                    heading_path_json AS heading_path,
                     chunk_text,
                     chunk_hash,
                     start_offset,
@@ -212,7 +212,7 @@ class ChunkRepository {
                     doc_id,
                     chunk_index,
                     anchor,
-                    heading_path,
+                    heading_path_json AS heading_path,
                     chunk_text,
                     chunk_hash,
                     start_offset,
@@ -257,7 +257,7 @@ class ChunkRepository {
                     doc_id,
                     chunk_index,
                     anchor,
-                    heading_path,
+                    heading_path_json AS heading_path,
                     chunk_text,
                     chunk_hash,
                     start_offset,
@@ -439,7 +439,7 @@ class ChunkRepository {
                     c.doc_id,
                     c.chunk_index,
                     c.anchor,
-                    c.heading_path,
+                    c.heading_path_json AS heading_path,
                     c.chunk_text,
                     c.chunk_hash,
                     c.start_offset,
@@ -516,7 +516,7 @@ class ChunkRepository {
                     c.doc_id,
                     c.chunk_index,
                     c.anchor,
-                    c.heading_path,
+                    c.heading_path_json AS heading_path,
                     c.chunk_text,
                     c.chunk_hash,
                     c.start_offset,
@@ -592,7 +592,7 @@ class ChunkRepository {
                     doc_id,
                     chunk_index,
                     anchor,
-                    heading_path,
+                    heading_path_json AS heading_path,
                     chunk_text,
                     chunk_hash,
                     start_offset,
@@ -621,5 +621,84 @@ class ChunkRepository {
         }
 
         return $grouped;
+    }
+
+    /**
+     * Compatibility wrapper: get chunk by ID (snake_case).
+     *
+     * @param int $id Chunk ID.
+     * @return object|null
+     */
+    public function get_by_id(int $id): ?object {
+        $chunk = $this->find($id);
+
+        if ($chunk === null) {
+            return null;
+        }
+
+        $chunk->heading_path_json = wp_json_encode($chunk->heading_path ?? []);
+        $chunk->has_vector = $this->wpdb->get_var(
+            $this->wpdb->prepare(
+                "SELECT 1 FROM {$this->vectors_table} WHERE chunk_id = %d LIMIT 1",
+                $id
+            )
+        ) !== null;
+
+        return $chunk;
+    }
+
+    /**
+     * Compatibility wrapper: get chunks for a document (snake_case).
+     *
+     * @param int $docId Document ID.
+     * @return array<object>
+     */
+    public function get_chunks_for_document(int $docId): array {
+        $results = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT
+                    c.id,
+                    c.doc_id,
+                    c.chunk_index,
+                    c.anchor,
+                    c.heading_path_json,
+                    c.chunk_text,
+                    c.token_estimate,
+                    c.created_at,
+                    CASE WHEN v.chunk_id IS NULL THEN 0 ELSE 1 END AS has_vector
+                 FROM {$this->table} c
+                 LEFT JOIN {$this->vectors_table} v ON c.id = v.chunk_id
+                 WHERE c.doc_id = %d
+                 ORDER BY c.chunk_index ASC",
+                $docId
+            )
+        );
+
+        return $results ?: [];
+    }
+
+    /**
+     * Compatibility wrapper: total chunk count (snake_case).
+     *
+     * @return int
+     */
+    public function count(): int {
+        return $this->getCount();
+    }
+
+    /**
+     * Compatibility wrapper: failed chunk count (snake_case).
+     *
+     * @return int
+     */
+    public function count_failed(): int {
+        $count = $this->wpdb->get_var(
+            "SELECT COUNT(*)
+             FROM {$this->table} c
+             JOIN {$this->docs_table} d ON c.doc_id = d.id
+             WHERE d.status = 'error'"
+        );
+
+        return (int) $count;
     }
 }

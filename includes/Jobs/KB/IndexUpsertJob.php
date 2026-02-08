@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Jobs\KB;
 
+use Vibe\AIIndex\Config;
+
 /**
  * KB Phase 4: Finalize indexing, update document status.
  *
@@ -89,9 +91,14 @@ class IndexUpsertJob {
     public function run(int $lastDocId): void {
         global $wpdb;
 
-        $docsTable = $wpdb->prefix . 'ai_kb_docs';
-        $chunksTable = $wpdb->prefix . 'ai_kb_chunks';
-        $vectorsTable = $wpdb->prefix . 'ai_kb_vectors';
+        if (get_option('vibe_ai_kb_pipeline_status', 'idle') !== 'running' || (bool) get_option('vibe_ai_kb_pipeline_stop_requested', 0)) {
+            $this->log('info', 'Index upsert skipped because pipeline is not running');
+            return;
+        }
+
+        $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $chunksTable = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $vectorsTable = $wpdb->prefix . Config::TABLE_KB_VECTORS;
 
         $this->log('info', 'Index upsert phase started', [
             'last_doc_id' => $lastDocId,
