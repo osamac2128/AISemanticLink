@@ -231,7 +231,7 @@ class SimilaritySearch
         ]);
 
         // Search for similar content, getting extra results to account for exclusions
-        $results = $this->searchWithVector($vector, $topK + 5, $filters);
+        $results = $this->searchWithVector($vector, $topK + 5, $excludeFilters);
 
         // Filter out results from the same document
         $filteredResults = array_filter($results, function ($result) use ($docId) {

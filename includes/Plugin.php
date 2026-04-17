@@ -102,6 +102,11 @@ class Plugin
     {
         // Inject Schema.org JSON-LD into head
         add_action('wp_head', [$this, 'injectSchema'], 1);
+
+        // Public AI publishing endpoints.
+        add_action('init', [$this, 'registerAIPublishingRoutes']);
+        add_filter('query_vars', [$this, 'registerAIPublishingQueryVars']);
+        add_action('template_redirect', [$this, 'handleAIPublishingRequest']);
     }
 
     /**
@@ -111,10 +116,16 @@ class Plugin
      */
     private function registerActionSchedulerHooks(): void
     {
-        // Pipeline processing hooks
-        add_action('vibe_ai_process_batch', [$this, 'processBatch'], 10, 2);
-        add_action('vibe_ai_propagate_entity', [$this, 'propagateEntityChange'], 10, 2);
-        add_action('vibe_ai_generate_schema', [$this, 'generateSchema'], 10, 1);
+        // Entity pipeline phase jobs — wired directly to Job class methods
+        add_action(\Vibe\AIIndex\Jobs\PreparationJob::HOOK, [\Vibe\AIIndex\Jobs\PreparationJob::class, 'execute'], 10, 1);
+        add_action(\Vibe\AIIndex\Jobs\ExtractionJob::HOOK, [\Vibe\AIIndex\Jobs\ExtractionJob::class, 'execute'], 10, 1);
+        add_action(\Vibe\AIIndex\Jobs\DeduplicationJob::HOOK, [\Vibe\AIIndex\Jobs\DeduplicationJob::class, 'execute'], 10, 1);
+        add_action(\Vibe\AIIndex\Jobs\LinkingJob::HOOK, [\Vibe\AIIndex\Jobs\LinkingJob::class, 'execute'], 10, 1);
+        add_action(\Vibe\AIIndex\Jobs\IndexingJob::HOOK, [\Vibe\AIIndex\Jobs\IndexingJob::class, 'execute'], 10, 1);
+        add_action(\Vibe\AIIndex\Jobs\SchemaBuildJob::HOOK, [\Vibe\AIIndex\Jobs\SchemaBuildJob::class, 'execute'], 10, 1);
+
+        // Entity propagation job
+        add_action(\Vibe\AIIndex\Jobs\PropagateEntityChangeJob::HOOK, [\Vibe\AIIndex\Jobs\PropagateEntityChangeJob::class, 'execute'], 10, 2);
 
         // Daily cleanup
         add_action('vibe_ai_daily_cleanup', [$this, 'dailyCleanup']);
@@ -138,6 +149,7 @@ class Plugin
 
         // Filters
         add_filter('vibe_ai_post_types', [$this, 'filterPostTypes']);
+        add_filter('vibe_ai_schema_post_types', [$this, 'filterPostTypes']);
         add_filter('vibe_ai_confidence_threshold', [$this, 'filterConfidenceThreshold']);
     }
 
@@ -245,7 +257,8 @@ class Plugin
                 as_schedule_single_action(
                     time(),
                     'vibe_ai_propagate_entity',
-                    ['entity_id' => $entity_id, 'last_post_id' => 0]
+                    ['entity_id' => $entity_id, 'last_post_id' => 0],
+                    'vibe-ai-index'
                 );
 
                 $this->logger->info('Entity propagation scheduled', [
@@ -254,47 +267,6 @@ class Plugin
                 ]);
             }
         }
-    }
-
-    /**
-     * Action Scheduler callback: Process a batch of posts.
-     *
-     * @param string $phase      Pipeline phase
-     * @param array  $batch_data Batch data
-     * @return void
-     */
-    public function processBatch(string $phase, array $batch_data): void
-    {
-        // Placeholder - will be implemented by PipelineManager
-        $this->logger->debug('Processing batch', ['phase' => $phase, 'batch' => $batch_data]);
-    }
-
-    /**
-     * Action Scheduler callback: Propagate entity changes.
-     *
-     * @param int $entity_id   Entity ID
-     * @param int $last_post_id Last processed post ID
-     * @return void
-     */
-    public function propagateEntityChange(int $entity_id, int $last_post_id): void
-    {
-        // Placeholder - will be implemented by PropagateEntityChangeJob
-        $this->logger->debug('Propagating entity change', [
-            'entity_id' => $entity_id,
-            'last_post_id' => $last_post_id,
-        ]);
-    }
-
-    /**
-     * Action Scheduler callback: Generate schema for a post.
-     *
-     * @param int $post_id Post ID
-     * @return void
-     */
-    public function generateSchema(int $post_id): void
-    {
-        // Placeholder - will be implemented by SchemaGenerator
-        $this->logger->debug('Generating schema', ['post_id' => $post_id]);
     }
 
     /**
@@ -382,6 +354,9 @@ class Plugin
             return;
         }
 
+        // Bootstrap the singleton so KB-specific hooks are registered exactly once.
+        $this->getKBPipelineManager();
+
         // Schedule KB reindex on post save
         add_action('save_post', [$this, 'scheduleKBReindex'], 20, 3);
 
@@ -425,7 +400,7 @@ class Plugin
         }
 
         // Schedule reindex via KBPipelineManager
-        $kbManager = new \Vibe\AIIndex\Pipeline\KBPipelineManager();
+        $kbManager = $this->getKBPipelineManager();
         $kbManager->schedulePost($postId);
 
         do_action('vibe_ai_kb_post_scheduled', $postId);
@@ -466,7 +441,7 @@ class Plugin
         delete_post_meta($postId, Config::KB_META_EXCLUDED);
 
         // Schedule for reindex
-        $kbManager = new \Vibe\AIIndex\Pipeline\KBPipelineManager();
+        $kbManager = $this->getKBPipelineManager();
         $kbManager->schedulePost($postId);
 
         do_action('vibe_ai_kb_post_included', $postId);
@@ -520,5 +495,143 @@ class Plugin
             10,
             0
         );
+    }
+
+    /**
+     * Register public AI publishing rewrite rules.
+     *
+     * @return void
+     */
+    public function registerAIPublishingRoutes(): void
+    {
+        add_rewrite_rule('^llms\.txt$', 'index.php?vibe_ai_public_asset=llms', 'top');
+        add_rewrite_rule('^ai-sitemap/?$', 'index.php?vibe_ai_public_asset=sitemap', 'top');
+        add_rewrite_rule('^ai-sitemap\.xml$', 'index.php?vibe_ai_public_asset=sitemap_xml', 'top');
+        add_rewrite_rule('^ai-sitemap\.json$', 'index.php?vibe_ai_public_asset=sitemap_json', 'top');
+        add_rewrite_rule('^changes/?$', 'index.php?vibe_ai_public_asset=changes', 'top');
+    }
+
+    /**
+     * Register public AI publishing query vars.
+     *
+     * @param array $vars Existing query vars.
+     * @return array Updated query vars.
+     */
+    public function registerAIPublishingQueryVars(array $vars): array
+    {
+        $vars[] = 'vibe_ai_public_asset';
+        return $vars;
+    }
+
+    /**
+     * Handle public AI publishing requests.
+     *
+     * @return void
+     */
+    public function handleAIPublishingRequest(): void
+    {
+        $asset = (string) get_query_var('vibe_ai_public_asset', '');
+
+        if ($asset === '') {
+            return;
+        }
+
+        if (!defined('DONOTCACHEPAGE')) {
+            define('DONOTCACHEPAGE', true);
+        }
+
+        switch ($asset) {
+            case 'llms':
+                $generator = new \Vibe\AIIndex\Services\KB\LlmsTxtGenerator();
+                $content = $generator->generate();
+                $etag = md5($content);
+                if ($this->sendNotModifiedIfMatch($etag, 'text/plain; charset=utf-8', 3600)) {
+                    return;
+                }
+
+                echo $content;
+                exit;
+
+            case 'sitemap':
+            case 'sitemap_json':
+                $generator = new \Vibe\AIIndex\Services\KB\AISitemapGenerator();
+                $data = $generator->generateJSON();
+                $etag = (string) ($data['content_hash'] ?? md5(wp_json_encode($data)));
+                if ($this->sendNotModifiedIfMatch($etag, 'application/json; charset=utf-8', 3600)) {
+                    return;
+                }
+
+                echo wp_json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                exit;
+
+            case 'sitemap_xml':
+                $generator = new \Vibe\AIIndex\Services\KB\AISitemapGenerator();
+                $content = $generator->generateXML();
+                $etag = md5($content);
+                if ($this->sendNotModifiedIfMatch($etag, 'application/xml; charset=utf-8', 3600)) {
+                    return;
+                }
+
+                echo $content;
+                exit;
+
+            case 'changes':
+                $generator = new \Vibe\AIIndex\Services\KB\ChangeFeedGenerator();
+                $result = $generator->getConditionalResponse(
+                    isset($_SERVER['HTTP_IF_NONE_MATCH']) ? (string) $_SERVER['HTTP_IF_NONE_MATCH'] : null
+                );
+
+                status_header((int) $result['status_code']);
+                foreach ($result['headers'] as $header => $value) {
+                    header($header . ': ' . $value);
+                }
+
+                header('Content-Type: application/json; charset=utf-8');
+                header('X-Robots-Tag: noindex, follow');
+
+                if ((int) $result['status_code'] === 304) {
+                    exit;
+                }
+
+                echo wp_json_encode($result['body'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                exit;
+        }
+    }
+
+    /**
+     * Send shared cache/etag headers and short-circuit on conditional GET matches.
+     *
+     * @param string $etag Cache validator.
+     * @param string $contentType Response content type.
+     * @param int    $maxAge Cache TTL in seconds.
+     * @return bool True when a 304 response was sent.
+     */
+    private function sendNotModifiedIfMatch(string $etag, string $contentType, int $maxAge): bool
+    {
+        header('Content-Type: ' . $contentType);
+        header('X-Robots-Tag: noindex, follow');
+        header('Cache-Control: public, max-age=' . $maxAge);
+        header('Last-Modified: ' . gmdate('D, d M Y H:i:s') . ' GMT');
+        header('ETag: "' . $etag . '"');
+
+        if (isset($_SERVER['HTTP_IF_NONE_MATCH'])) {
+            $clientEtag = trim((string) $_SERVER['HTTP_IF_NONE_MATCH'], '"');
+            if ($clientEtag === $etag) {
+                status_header(304);
+                exit;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Get the singleton KB pipeline manager.
+     *
+     * @return \Vibe\AIIndex\Pipeline\KBPipelineManager
+     */
+    private function getKBPipelineManager(): \Vibe\AIIndex\Pipeline\KBPipelineManager
+    {
+        return \Vibe\AIIndex\Pipeline\KBPipelineManager::get_instance();
     }
 }

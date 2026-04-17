@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Repositories\KB;
 
+use Vibe\AIIndex\Config;
+
 /**
  * Repository for wp_ai_kb_chunks table operations.
  *
@@ -49,9 +51,9 @@ class ChunkRepository {
     public function __construct() {
         global $wpdb;
         $this->wpdb          = $wpdb;
-        $this->table         = $wpdb->prefix . 'ai_kb_chunks';
-        $this->docs_table    = $wpdb->prefix . 'ai_kb_docs';
-        $this->vectors_table = $wpdb->prefix . 'ai_kb_vectors';
+        $this->table         = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $this->docs_table    = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $this->vectors_table = $wpdb->prefix . Config::TABLE_KB_VECTORS;
     }
 
     /**
@@ -81,6 +83,7 @@ class ChunkRepository {
         $inserted_ids = [];
 
         $this->wpdb->query('START TRANSACTION');
+        $success = false;
 
         try {
             foreach ($chunks as $chunk) {
@@ -93,7 +96,6 @@ class ChunkRepository {
                 $end_offset     = (int) ($chunk['end_offset'] ?? 0);
                 $token_estimate = (int) ($chunk['token_estimate'] ?? 0);
 
-                // Encode heading path as JSON.
                 $heading_path_json = wp_json_encode($heading_path);
 
                 $this->wpdb->insert(
@@ -113,15 +115,22 @@ class ChunkRepository {
                     ['%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s']
                 );
 
+                if ($this->wpdb->last_error) {
+                    $this->wpdb->query('ROLLBACK');
+                    throw new \RuntimeException($this->wpdb->last_error);
+                }
+
                 $inserted_ids[] = (int) $this->wpdb->insert_id;
             }
 
             $this->wpdb->query('COMMIT');
+            $success = true;
 
             return $inserted_ids;
-        } catch (\Exception $e) {
-            $this->wpdb->query('ROLLBACK');
-            throw $e;
+        } finally {
+            if (!$success) {
+                @$this->wpdb->query('ROLLBACK');
+            }
         }
     }
 
@@ -291,9 +300,9 @@ class ChunkRepository {
      */
     public function deleteByDocId(int $docId): void {
         $this->wpdb->query('START TRANSACTION');
+        $success = false;
 
         try {
-            // Get chunk IDs.
             $chunk_ids = $this->wpdb->get_col(
                 $this->wpdb->prepare(
                     "SELECT id FROM {$this->table} WHERE doc_id = %d",
@@ -301,7 +310,6 @@ class ChunkRepository {
                 )
             );
 
-            // Delete vectors for these chunks.
             if (!empty($chunk_ids)) {
                 $placeholders = implode(', ', array_fill(0, count($chunk_ids), '%d'));
                 $this->wpdb->query(
@@ -310,19 +318,30 @@ class ChunkRepository {
                         ...$chunk_ids
                     )
                 );
+
+                if ($this->wpdb->last_error) {
+                    $this->wpdb->query('ROLLBACK');
+                    throw new \RuntimeException($this->wpdb->last_error);
+                }
             }
 
-            // Delete chunks.
             $this->wpdb->delete(
                 $this->table,
                 ['doc_id' => $docId],
                 ['%d']
             );
 
+            if ($this->wpdb->last_error) {
+                $this->wpdb->query('ROLLBACK');
+                throw new \RuntimeException($this->wpdb->last_error);
+            }
+
             $this->wpdb->query('COMMIT');
-        } catch (\Exception $e) {
-            $this->wpdb->query('ROLLBACK');
-            throw $e;
+            $success = true;
+        } finally {
+            if (!$success) {
+                @$this->wpdb->query('ROLLBACK');
+            }
         }
     }
 
@@ -343,9 +362,9 @@ class ChunkRepository {
         $placeholders = implode(', ', array_fill(0, count($hashes), '%s'));
 
         $this->wpdb->query('START TRANSACTION');
+        $success = false;
 
         try {
-            // Get chunk IDs for these hashes.
             $chunk_ids = $this->wpdb->get_col(
                 $this->wpdb->prepare(
                     "SELECT id FROM {$this->table}
@@ -355,7 +374,6 @@ class ChunkRepository {
                 )
             );
 
-            // Delete vectors for these chunks.
             if (!empty($chunk_ids)) {
                 $id_placeholders = implode(', ', array_fill(0, count($chunk_ids), '%d'));
                 $this->wpdb->query(
@@ -364,9 +382,13 @@ class ChunkRepository {
                         ...$chunk_ids
                     )
                 );
+
+                if ($this->wpdb->last_error) {
+                    $this->wpdb->query('ROLLBACK');
+                    throw new \RuntimeException($this->wpdb->last_error);
+                }
             }
 
-            // Delete chunks.
             $this->wpdb->query(
                 $this->wpdb->prepare(
                     "DELETE FROM {$this->table}
@@ -376,10 +398,17 @@ class ChunkRepository {
                 )
             );
 
+            if ($this->wpdb->last_error) {
+                $this->wpdb->query('ROLLBACK');
+                throw new \RuntimeException($this->wpdb->last_error);
+            }
+
             $this->wpdb->query('COMMIT');
-        } catch (\Exception $e) {
-            $this->wpdb->query('ROLLBACK');
-            throw $e;
+            $success = true;
+        } finally {
+            if (!$success) {
+                @$this->wpdb->query('ROLLBACK');
+            }
         }
     }
 

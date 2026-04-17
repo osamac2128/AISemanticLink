@@ -60,6 +60,14 @@ class Activator
         if (!wp_next_scheduled('vibe_ai_daily_cleanup')) {
             wp_schedule_event(time(), 'daily', 'vibe_ai_daily_cleanup');
         }
+
+        // Register and flush public AI publishing rewrites.
+        add_rewrite_rule('^llms\.txt$', 'index.php?vibe_ai_public_asset=llms', 'top');
+        add_rewrite_rule('^ai-sitemap/?$', 'index.php?vibe_ai_public_asset=sitemap', 'top');
+        add_rewrite_rule('^ai-sitemap\.xml$', 'index.php?vibe_ai_public_asset=sitemap_xml', 'top');
+        add_rewrite_rule('^ai-sitemap\.json$', 'index.php?vibe_ai_public_asset=sitemap_json', 'top');
+        add_rewrite_rule('^changes/?$', 'index.php?vibe_ai_public_asset=changes', 'top');
+        flush_rewrite_rules();
     }
 
     /**
@@ -115,7 +123,7 @@ class Activator
             status varchar(20) DEFAULT 'raw',
             mention_count int unsigned DEFAULT 0,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
             UNIQUE KEY idx_slug (slug),
             KEY idx_type (type),
@@ -253,7 +261,7 @@ class Activator
             status varchar(20) DEFAULT 'pending',
             last_indexed_at datetime DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
             UNIQUE KEY idx_post_id (post_id),
             KEY idx_status (status),

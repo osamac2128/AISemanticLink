@@ -37,22 +37,13 @@ class PreparationJob {
     private const OPTION_QUEUED_POSTS = 'vibe_ai_queued_posts';
 
     /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 1);
-    }
-
-    /**
      * Execute the preparation phase.
      *
      * @param array $args Job arguments containing config.
      * @return void
      */
     public static function execute(array $args = []): void {
-        $config = $args['config'] ?? [];
+        $config = $args['config'] ?? (isset($args['batch_size']) ? $args : []);
         $job = new self();
 
         try {

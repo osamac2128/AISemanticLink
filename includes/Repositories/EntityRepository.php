@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Repositories;
 
+use Vibe\AIIndex\Config;
+
 /**
  * EntityRepository: The Gatekeeper of Truth.
  *
@@ -52,9 +54,9 @@ class EntityRepository
     {
         global $wpdb;
         $this->wpdb = $wpdb;
-        $this->entities_table = $wpdb->prefix . 'ai_entities';
-        $this->mentions_table = $wpdb->prefix . 'ai_mentions';
-        $this->aliases_table = $wpdb->prefix . 'ai_aliases';
+        $this->entities_table = $wpdb->prefix . Config::TABLE_ENTITIES;
+        $this->mentions_table = $wpdb->prefix . Config::TABLE_MENTIONS;
+        $this->aliases_table = $wpdb->prefix . Config::TABLE_ALIASES;
     }
 
     /**
@@ -191,8 +193,8 @@ class EntityRepository
         // Clamp confidence to valid range.
         $confidence = max(0.0, min(1.0, $confidence));
 
-        // Start Transaction
         $this->wpdb->query('START TRANSACTION');
+        $success = false;
 
         try {
             $this->wpdb->query(
@@ -212,13 +214,24 @@ class EntityRepository
                 )
             );
 
-            // Update mention count on entity.
+            if ($this->wpdb->last_error) {
+                $this->wpdb->query('ROLLBACK');
+                throw new \RuntimeException($this->wpdb->last_error);
+            }
+
             $this->update_mention_count($entity_id);
 
+            if ($this->wpdb->last_error) {
+                $this->wpdb->query('ROLLBACK');
+                throw new \RuntimeException($this->wpdb->last_error);
+            }
+
             $this->wpdb->query('COMMIT');
-        } catch (\Exception $e) {
-            $this->wpdb->query('ROLLBACK');
-            throw $e;
+            $success = true;
+        } finally {
+            if (!$success) {
+                @$this->wpdb->query('ROLLBACK');
+            }
         }
     }
 
@@ -229,7 +242,7 @@ class EntityRepository
      *
      * @return void
      */
-    private function update_mention_count(int $entity_id): void
+    public function update_mention_count(int $entity_id): void
     {
         $this->wpdb->query(
             $this->wpdb->prepare(

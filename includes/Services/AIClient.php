@@ -144,8 +144,6 @@ class AIClient
      */
     public function extract(string $content, string $system_prompt, ?string $model = null): array
     {
-        $this->guardCircuit();
-
         if (trim($content) === '') {
             throw new \InvalidArgumentException('Content cannot be empty');
         }
@@ -159,6 +157,7 @@ class AIClient
 
         for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
             try {
+                $this->guardCircuit();
                 $this->checkRateLimit();
 
                 $response = $this->makeRequest($content, $system_prompt, $model);

@@ -4,7 +4,7 @@ Tags: seo, schema, entities, ai, knowledge-graph, json-ld, rag
 Requires at least: 6.0
 Tested up to: 6.4
 Requires PHP: 8.1
-Stable tag: 1.0.0
+Stable tag: 1.0.8
 License: Proprietary
 License URI: LICENSE
 
@@ -66,14 +66,13 @@ Version 1.0 includes a MySQL-based vector store. The architecture is adapter-rea
 
 == Changelog ==
 
-= 1.0.0 =
-* Initial release
-* Phase 1: Complete entity extraction pipeline
-* Phase 2: Knowledge Base (RAG) module
-* React admin interface
-* REST API endpoints
+= 1.0.8 =
+* Fixed admin UI to match shipped REST response contracts
+* Repaired Knowledge Base pipeline status lifecycle and single-post indexing flow
+* Added public AI publishing endpoints for `llms.txt`, `ai-sitemap`, and `changes`
+* Aligned KB chunk defaults and tests to 450 target tokens / 60 overlap tokens
 
 == Upgrade Notice ==
 
-= 1.0.0 =
-Initial release of AI Entity Index.
+= 1.0.8 =
+Includes KB pipeline, admin contract, and AI publishing endpoint fixes.

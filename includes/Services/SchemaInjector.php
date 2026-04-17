@@ -75,6 +75,10 @@ class SchemaInjector
             return;
         }
 
+        if (!$this->is_enabled()) {
+            return;
+        }
+
         $post_id = get_the_ID();
 
         if (!$post_id) {

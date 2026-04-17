@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Jobs;
 
-use Vibe\AIIndex\Services\SchemaGenerator;
-
 /**
  * PropagateEntityChangeJob: Chain-Link invalidation job.
  *
@@ -20,7 +18,7 @@ class PropagateEntityChangeJob {
     /**
      * Action hook for this job.
      */
-    public const JOB_HOOK = 'vibe_ai_propagate_entity';
+    public const HOOK = 'vibe_ai_propagate_entity';
 
     /**
      * Batch size for processing posts.
@@ -36,15 +34,6 @@ class PropagateEntityChangeJob {
      * Transient expiration time in seconds.
      */
     private const TRANSIENT_EXPIRATION = HOUR_IN_SECONDS;
-
-    /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::JOB_HOOK, [self::class, 'handle'], 10, 2);
-    }
 
     /**
      * Schedule a propagation job for an entity.
@@ -67,7 +56,7 @@ class PropagateEntityChangeJob {
         // Schedule the job
         as_schedule_single_action(
             time(),
-            self::JOB_HOOK,
+            self::HOOK,
             [
                 'entity_id'    => $entity_id,
                 'last_post_id' => $last_post_id,
@@ -87,11 +76,11 @@ class PropagateEntityChangeJob {
      * @param int $last_post_id Last processed post ID.
      * @return void
      */
-    public static function handle(int $entity_id, int $last_post_id): void {
+    public static function execute(int $entity_id, int $last_post_id): void {
         $job = new self();
 
         try {
-            $job->execute($entity_id, $last_post_id);
+            $job->run($entity_id, $last_post_id);
         } catch (\Throwable $e) {
             $job->handle_error($entity_id, $e);
         }
@@ -104,7 +93,7 @@ class PropagateEntityChangeJob {
      * @param int $last_post_id Last processed post ID.
      * @return void
      */
-    public function execute(int $entity_id, int $last_post_id): void {
+    public function run(int $entity_id, int $last_post_id): void {
         global $wpdb;
 
         $mentions_table = $wpdb->prefix . 'ai_mentions';
@@ -236,7 +225,7 @@ class PropagateEntityChangeJob {
 
         // Unschedule pending jobs
         as_unschedule_all_actions(
-            self::JOB_HOOK,
+            self::HOOK,
             ['entity_id' => $entity_id],
             'vibe-ai-index'
         );

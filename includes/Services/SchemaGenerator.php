@@ -35,7 +35,7 @@ class SchemaGenerator
     /**
      * Current schema version.
      */
-    public const SCHEMA_VERSION = 1;
+    public const SCHEMA_VERSION = 2;
 
     /**
      * Minimum confidence threshold for including entities in schema.
@@ -247,20 +247,37 @@ class SchemaGenerator
      */
     public function build_article_schema(\WP_Post $post, array $entities): array
     {
-        $site_url = get_site_url();
+        $site_url = $this->get_site_url();
         $post_url = get_permalink($post);
+        $description = $this->get_post_description($post);
+        $image = $this->get_post_image($post);
 
         $article = [
-            '@type'         => $this->get_article_type($post),
-            '@id'           => $post_url . '#article',
-            'headline'      => $post->post_title,
-            'datePublished' => get_the_date('c', $post),
-            'dateModified'  => get_the_modified_date('c', $post),
+            '@type'            => $this->get_article_type($post),
+            '@id'              => $post_url . '#article',
+            'url'              => $post_url,
+            'name'             => $post->post_title,
+            'headline'         => $post->post_title,
+            'datePublished'    => get_the_date('c', $post),
+            'dateModified'     => get_the_modified_date('c', $post),
             'mainEntityOfPage' => [
-                '@type' => 'WebPage',
-                '@id'   => $post_url,
+                '@id' => $post_url,
+            ],
+            'isPartOf'         => [
+                '@id' => $site_url . '#website',
+            ],
+            'publisher'        => [
+                '@id' => $site_url . '#publisher',
             ],
         ];
+
+        if (!empty($description)) {
+            $article['description'] = $description;
+        }
+
+        if (!empty($image)) {
+            $article['image'] = $image;
+        }
 
         // Add author if available
         $author = get_userdata($post->post_author);
@@ -275,8 +292,7 @@ class SchemaGenerator
         // Build mentions array
         $mentions = [];
         foreach ($entities as $entity) {
-            $slug = !empty($entity->slug) ? $entity->slug : sanitize_title($entity->name);
-            $mentions[] = ['@id' => $site_url . '/#/entity/' . $slug];
+            $mentions[] = $this->build_entity_reference($entity);
         }
 
         if (!empty($mentions)) {
@@ -284,14 +300,9 @@ class SchemaGenerator
         }
 
         // Add primary entity as "about" if available
-        foreach ($entities as $entity) {
-            if (!empty($entity->is_primary)) {
-                $slug = !empty($entity->slug) ? $entity->slug : sanitize_title($entity->name);
-                $article['about'] = [
-                    '@id' => $site_url . '/#/entity/' . $slug,
-                ];
-                break;
-            }
+        $primary_entity = $this->get_primary_entity_reference($entities);
+        if ($primary_entity !== null) {
+            $article['about'] = $primary_entity;
         }
 
         return $article;
@@ -310,6 +321,13 @@ class SchemaGenerator
         // Build the @graph array
         $graph = [];
 
+        $graph[] = $this->build_website_schema();
+        $graph[] = $this->build_publisher_schema();
+
+        if ($this->should_add_webpage_node($post)) {
+            $graph[] = $this->build_webpage_schema($post, $entities);
+        }
+
         // Add article node
         $graph[] = $this->build_article_schema($post, $entities);
 
@@ -322,6 +340,112 @@ class SchemaGenerator
             '@context' => 'https://schema.org',
             '@graph'   => $graph,
         ];
+    }
+
+    /**
+     * Build a site-wide WebSite node.
+     *
+     * @return array<string, mixed>
+     */
+    private function build_website_schema(): array
+    {
+        $site_url = $this->get_site_url();
+        $site_name = $this->get_site_name();
+        $site_description = $this->get_site_description();
+
+        $website = [
+            '@type'     => 'WebSite',
+            '@id'       => $site_url . '#website',
+            'url'       => $site_url,
+            'name'      => $site_name,
+            'publisher' => [
+                '@id' => $site_url . '#publisher',
+            ],
+        ];
+
+        if (!empty($site_description)) {
+            $website['description'] = $site_description;
+        }
+
+        return $website;
+    }
+
+    /**
+     * Build the site publisher node.
+     *
+     * @return array<string, mixed>
+     */
+    private function build_publisher_schema(): array
+    {
+        $site_url = $this->get_site_url();
+        $publisher_type = (string) apply_filters('vibe_ai_site_publisher_type', 'Organization');
+        $publisher = [
+            '@type' => $publisher_type,
+            '@id'   => $site_url . '#publisher',
+            'name'  => $this->get_site_name(),
+            'url'   => $site_url,
+        ];
+
+        $site_description = $this->get_site_description();
+        if (!empty($site_description)) {
+            $publisher['description'] = $site_description;
+        }
+
+        $logo_url = $this->get_site_logo_url();
+        if (!empty($logo_url)) {
+            $publisher['logo'] = [
+                '@type' => 'ImageObject',
+                'url'   => $logo_url,
+            ];
+        }
+
+        return $publisher;
+    }
+
+    /**
+     * Build a canonical WebPage node for the current post.
+     *
+     * @param \WP_Post $post     The post object.
+     * @param array    $entities Array of entity objects.
+     *
+     * @return array<string, mixed>
+     */
+    private function build_webpage_schema(\WP_Post $post, array $entities): array
+    {
+        $site_url = $this->get_site_url();
+        $post_url = get_permalink($post);
+        $description = $this->get_post_description($post);
+        $image = $this->get_post_image($post);
+
+        $page = [
+            '@type'         => 'WebPage',
+            '@id'           => $post_url,
+            'url'           => $post_url,
+            'name'          => $post->post_title,
+            'datePublished' => get_the_date('c', $post),
+            'dateModified'  => get_the_modified_date('c', $post),
+            'isPartOf'      => [
+                '@id' => $site_url . '#website',
+            ],
+        ];
+
+        if (!empty($description)) {
+            $page['description'] = $description;
+        }
+
+        if (!empty($image)) {
+            $page['primaryImageOfPage'] = [
+                '@type' => 'ImageObject',
+                'url'   => $image,
+            ];
+        }
+
+        $primary_entity = $this->get_primary_entity_reference($entities);
+        if ($primary_entity !== null) {
+            $page['about'] = $primary_entity;
+        }
+
+        return $page;
     }
 
     /**
@@ -350,6 +474,20 @@ class SchemaGenerator
     }
 
     /**
+     * Determine whether an additional WebPage node should be emitted.
+     *
+     * When the primary content node is already a WebPage (for example, pages),
+     * we avoid duplicating the canonical page node.
+     *
+     * @param \WP_Post $post Post object.
+     * @return bool True when a separate WebPage node should be added.
+     */
+    private function should_add_webpage_node(\WP_Post $post): bool
+    {
+        return $this->get_article_type($post) !== 'WebPage';
+    }
+
+    /**
      * Map internal entity type to Schema.org type.
      *
      * @param string      $internal_type Internal type (e.g., PERSON, ORG).
@@ -367,6 +505,149 @@ class SchemaGenerator
         $type_upper = strtoupper($internal_type);
 
         return self::TYPE_MAPPING[$type_upper] ?? 'Thing';
+    }
+
+    /**
+     * Build a reference object for an entity node.
+     *
+     * @param object $entity Entity object.
+     * @return array<string, string>
+     */
+    private function build_entity_reference(object $entity): array
+    {
+        $site_url = $this->get_site_url();
+        $slug = !empty($entity->slug) ? $entity->slug : sanitize_title($entity->name);
+
+        return [
+            '@id' => $site_url . '/#/entity/' . $slug,
+        ];
+    }
+
+    /**
+     * Get the primary entity reference for a post, if available.
+     *
+     * @param array $entities Array of entity objects.
+     * @return array<string, string>|null
+     */
+    private function get_primary_entity_reference(array $entities): ?array
+    {
+        foreach ($entities as $entity) {
+            if (!empty($entity->is_primary)) {
+                return $this->build_entity_reference($entity);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the current site URL.
+     *
+     * @return string
+     */
+    private function get_site_url(): string
+    {
+        if (function_exists('get_site_url')) {
+            return (string) get_site_url();
+        }
+
+        return (string) home_url();
+    }
+
+    /**
+     * Get the current site name.
+     *
+     * @return string
+     */
+    private function get_site_name(): string
+    {
+        if (function_exists('get_bloginfo')) {
+            return (string) get_bloginfo('name');
+        }
+
+        return 'Website';
+    }
+
+    /**
+     * Get the current site description.
+     *
+     * @return string|null
+     */
+    private function get_site_description(): ?string
+    {
+        if (!function_exists('get_bloginfo')) {
+            return null;
+        }
+
+        $description = trim((string) get_bloginfo('description'));
+
+        return $description !== '' ? $description : null;
+    }
+
+    /**
+     * Get a post description suitable for schema output.
+     *
+     * @param \WP_Post $post Post object.
+     * @return string|null
+     */
+    private function get_post_description(\WP_Post $post): ?string
+    {
+        if (!empty($post->post_excerpt)) {
+            return wp_strip_all_tags((string) $post->post_excerpt);
+        }
+
+        $yoast_description = get_post_meta($post->ID, '_yoast_wpseo_metadesc', true);
+        if (!empty($yoast_description)) {
+            return (string) $yoast_description;
+        }
+
+        $rank_math_description = get_post_meta($post->ID, 'rank_math_description', true);
+        if (!empty($rank_math_description)) {
+            return (string) $rank_math_description;
+        }
+
+        if (empty($post->post_content)) {
+            return null;
+        }
+
+        return wp_trim_words(wp_strip_all_tags((string) $post->post_content), 30, '...');
+    }
+
+    /**
+     * Get a site logo URL, if WordPress exposes one.
+     *
+     * @return string|null
+     */
+    private function get_site_logo_url(): ?string
+    {
+        if (!function_exists('get_site_icon_url')) {
+            return null;
+        }
+
+        $logo_url = get_site_icon_url();
+
+        return !empty($logo_url) ? (string) $logo_url : null;
+    }
+
+    /**
+     * Get a representative post image URL, if one exists.
+     *
+     * @param \WP_Post $post Post object.
+     * @return string|null
+     */
+    private function get_post_image(\WP_Post $post): ?string
+    {
+        if (!function_exists('has_post_thumbnail') || !function_exists('get_the_post_thumbnail_url')) {
+            return null;
+        }
+
+        if (!has_post_thumbnail($post)) {
+            return null;
+        }
+
+        $image_url = get_the_post_thumbnail_url($post, 'full');
+
+        return !empty($image_url) ? (string) $image_url : null;
     }
 
     /**

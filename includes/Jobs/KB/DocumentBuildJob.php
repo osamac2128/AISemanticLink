@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vibe\AIIndex\Jobs\KB;
 
 use Vibe\AIIndex\Config;
+use Vibe\AIIndex\Pipeline\KBPipelineManager;
 
 /**
  * KB Phase 1: Build document records from posts.
@@ -39,15 +40,6 @@ class DocumentBuildJob {
     private const META_EXCLUDED = '_vibe_ai_kb_excluded';
 
     /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 2);
-    }
-
-    /**
      * Schedule the document build job.
      *
      * @param array $options Pipeline options.
@@ -72,8 +64,9 @@ class DocumentBuildJob {
      * @param array $options    Pipeline options.
      * @return void
      */
-    public static function execute(int $lastPostId = 0, array $options = []): void {
+    public static function execute(mixed $lastPostId = 0, mixed $options = []): void {
         $job = new self();
+        [$lastPostId, $options] = $job->normalizeExecutionArgs($lastPostId, $options);
 
         try {
             $job->run($lastPostId, $options);
@@ -98,6 +91,7 @@ class DocumentBuildJob {
         }
 
         $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $manager   = KBPipelineManager::get_instance();
 
         $this->log('info', 'Document build phase started', [
             'last_post_id' => $lastPostId,
@@ -109,13 +103,12 @@ class DocumentBuildJob {
         $batchSize = $options['batch_size'] ?? self::BATCH_SIZE;
 
         // Query posts after last processed ID
-        $posts = $this->getPublishablePosts($postTypes, $lastPostId, $batchSize);
+        $posts = $this->getPublishablePosts($postTypes, $lastPostId, $batchSize, $options);
 
         if (empty($posts)) {
             $this->log('info', 'Document build phase complete - no more posts');
             $this->clearBatchState();
             do_action('vibe_ai_kb_document_build_complete');
-            $this->advanceToNextPhase($options);
             return;
         }
 
@@ -131,6 +124,21 @@ class DocumentBuildJob {
 
             // Check if post is excluded
             if ($this->isExcluded($postId)) {
+                $existingDoc = $wpdb->get_row($wpdb->prepare(
+                    "SELECT id FROM {$docsTable} WHERE post_id = %d",
+                    $postId
+                ));
+
+                if ($existingDoc) {
+                    $wpdb->update(
+                        $docsTable,
+                        ['status' => Config::KB_STATUS_EXCLUDED],
+                        ['id' => $existingDoc->id],
+                        ['%s'],
+                        ['%d']
+                    );
+                }
+
                 $skippedCount++;
                 $this->log('debug', "Post {$postId} is excluded from KB");
                 continue;
@@ -156,7 +164,7 @@ class DocumentBuildJob {
 
             if ($existingDoc) {
                 // Document exists - check if content changed
-                if ($existingDoc->content_hash === $contentHash) {
+                if (!(bool) ($options['force'] ?? false) && $existingDoc->content_hash === $contentHash) {
                     // Content unchanged, skip
                     $skippedCount++;
                     continue;
@@ -172,7 +180,7 @@ class DocumentBuildJob {
                         'title'           => $post->post_title,
                         'url'             => is_string($docUrl) ? $docUrl : '',
                         'content_hash'    => $contentHash,
-                        'status'          => 'pending',
+                        'status'          => Config::KB_STATUS_PENDING,
                         'chunk_count'     => 0,
                         'last_indexed_at' => null,
                     ],
@@ -196,7 +204,7 @@ class DocumentBuildJob {
                         'url'             => is_string($docUrl) ? $docUrl : '',
                         'content_hash'    => $contentHash,
                         'chunk_count'     => 0,
-                        'status'          => 'pending',
+                        'status'          => Config::KB_STATUS_PENDING,
                         'last_indexed_at' => null,
                     ],
                     ['%d', '%s', '%s', '%s', '%s', '%d', '%s', '%s']
@@ -227,6 +235,8 @@ class DocumentBuildJob {
             'last_post_id'   => $maxPostId,
         ]);
 
+        $manager->recordPhaseProgress($processedCount, 0, $skippedCount);
+
         // Fire batch complete action
         do_action('vibe_ai_kb_document_build_batch', $processedCount, $insertedCount, $updatedCount);
 
@@ -252,8 +262,50 @@ class DocumentBuildJob {
      * @param int   $limit      Number of posts to fetch.
      * @return array Post objects.
      */
-    private function getPublishablePosts(array $postTypes, int $lastPostId, int $limit): array {
+    private function getPublishablePosts(array $postTypes, int $lastPostId, int $limit, array $options = []): array {
         global $wpdb;
+
+        $scope = (string) ($options['scope'] ?? 'all');
+
+        if ($scope === 'post_id') {
+            $postId = (int) ($options['post_id'] ?? 0);
+            if ($postId <= 0 || $lastPostId >= $postId) {
+                return [];
+            }
+
+            $query = $wpdb->prepare(
+                "SELECT ID, post_title, post_content, post_type
+                 FROM {$wpdb->posts}
+                 WHERE post_status = 'publish'
+                 AND ID = %d
+                 LIMIT 1",
+                $postId
+            );
+
+            return $wpdb->get_results($query);
+        }
+
+        if ($scope === 'post_type' && !empty($options['post_type'])) {
+            $query = $wpdb->prepare(
+                "SELECT ID, post_title, post_content, post_type
+                 FROM {$wpdb->posts}
+                 WHERE post_status = 'publish'
+                 AND post_type = %s
+                 AND ID > %d
+                 ORDER BY ID ASC
+                 LIMIT %d",
+                sanitize_text_field((string) $options['post_type']),
+                $lastPostId,
+                $limit
+            );
+
+            return $wpdb->get_results($query);
+        }
+
+        $postTypes = array_values(array_filter(array_map('sanitize_text_field', $postTypes)));
+        if (empty($postTypes)) {
+            return [];
+        }
 
         $postTypesPlaceholder = implode(',', array_fill(0, count($postTypes), '%s'));
 
@@ -269,6 +321,26 @@ class DocumentBuildJob {
         );
 
         return $wpdb->get_results($query);
+    }
+
+    /**
+     * Normalize Action Scheduler arguments across old and new payload shapes.
+     *
+     * @param mixed $lastPostId Last processed post ID or legacy args array.
+     * @param mixed $options    Pipeline options or legacy args array.
+     * @return array{0: int, 1: array}
+     */
+    private function normalizeExecutionArgs(mixed $lastPostId, mixed $options): array {
+        if (is_array($lastPostId)) {
+            $options = $lastPostId['options'] ?? $options;
+            $lastPostId = $lastPostId['last_post_id'] ?? 0;
+        }
+
+        if (!is_array($options)) {
+            $options = [];
+        }
+
+        return [(int) $lastPostId, $options];
     }
 
     /**
@@ -373,17 +445,6 @@ class DocumentBuildJob {
         );
 
         $this->log('debug', 'Next document build batch scheduled');
-    }
-
-    /**
-     * Advance to the next phase (ChunkBuildJob).
-     *
-     * @param array $options Pipeline options.
-     * @return void
-     */
-    private function advanceToNextPhase(array $options): void {
-        ChunkBuildJob::schedule(0);
-        $this->log('info', 'Advancing to chunk build phase');
     }
 
     /**

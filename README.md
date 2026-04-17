@@ -1,37 +1,64 @@
 # AI Entity Index
 
-**Semantic Truth Layer for WordPress** - Extract, normalize, and link named entities with Schema.org JSON-LD output. Includes RAG-ready Knowledge Base.
+**Semantic Truth Layer for WordPress**
 
-## Features
+![Version](https://img.shields.io/badge/version-1.0.8-blue) ![PHP](https://img.shields.io/badge/PHP-8.1%2B-purple) ![WordPress](https://img.shields.io/badge/WordPress-6.0%2B-blue) ![License](https://img.shields.io/badge/license-Proprietary-red)
 
-### Phase 1: Entity Extraction
-- 6-phase pipeline with Action Scheduler
-- 10 entity types (Person, Organization, Location, etc.)
-- Schema.org JSON-LD injection
-- Alias resolution and deduplication
-- Chain-link cache invalidation
+Extract, normalize, and link named entities with Schema.org JSON-LD output. Build a RAG-ready Knowledge Base with semantic search and AI publishing.
 
-### Phase 2: Knowledge Base (RAG)
-- Semantic chunking by heading boundaries
-- OpenRouter embeddings integration
-- MySQL vector storage (adapter-ready)
-- Semantic search API
-- AI publishing: llms.txt, AI sitemap, change feed
+## Overview
+
+AI Entity Index is a **Semantic Truth Layer** for WordPress. It reads your content, identifies named entities, normalizes them into a structured index, and emits Schema.org JSON-LD — making your site legible to both search engines and AI agents.
+
+The plugin has two major subsystems:
+
+| Subsystem | Purpose |
+|-----------|---------|
+| **Entity Extraction** | Discovers and links named entities across all published content |
+| **Knowledge Base** | Chunks, embeds, and indexes content for semantic search and AI consumption |
+
+## Key Features
+
+### Entity Extraction
+
+- **6-phase extraction pipeline** — content is fetched, sent to AI, parsed, deduplicated, linked to posts, and injected as JSON-LD
+- **10 entity types** — Person, Organization, Location, Event, Product, CreativeWork, Concept, Technology, Law, MedicalCondition — each mapped to Schema.org
+- **Schema.org JSON-LD injection** — automatically added to page `<head>` for linked entities
+- **Alias resolution and deduplication** — "OpenAI", "OpenAI Inc.", and "OpenAI, Inc." resolve to a single entity
+- **Chain-link cache invalidation** — editing an entity propagates changes to every post that mentions it
+- **Background processing** — powered by Action Scheduler for reliable, non-blocking extraction
+
+### Knowledge Base (RAG)
+
+- **Semantic chunking** — content is split by heading boundaries into coherent passages
+- **Vector embeddings** — generated via OpenRouter, stored in MySQL with a `VectorStoreInterface` adapter pattern
+- **Semantic search API** — query your content by meaning, not keywords
+- **AI publishing** — automatic `llms.txt`, AI sitemap, and change feed endpoints make your content discoverable by AI agents
+
+### Admin UI
+
+- **React SPA** — modern single-page admin built with React, TanStack Query, and TanStack Table
+- **Dashboard** — pipeline status, entity counts, recent activity
+- **Entity Manager** — browse, search, merge, bulk-edit entities with an inline drawer
+- **KB Manager** — Overview, Documents, Test Search, Settings, Logs
+- **Settings** — API configuration, pipeline tuning, logging controls
 
 ## Requirements
 
-- WordPress 6.0+
-- PHP 8.1+
-- MySQL 8.0+ / MariaDB 10.6+
-- OpenRouter API key
+| Requirement | Minimum Version |
+|-------------|----------------|
+| WordPress | 6.0+ |
+| PHP | 8.1+ |
+| MySQL / MariaDB | 8.0+ / 10.6+ |
+| OpenRouter API key | Any plan |
 
 ## Installation
 
 ### Option 1: Download Release (Recommended)
 
 1. Download the latest release zip from GitHub Releases
-2. Go to WordPress Admin → Plugins → Add New → Upload Plugin
-3. Select the zip file and click "Install Now"
+2. Go to **WordPress Admin → Plugins → Add New → Upload Plugin**
+3. Select the zip file and click **Install Now**
 4. Activate the plugin
 5. Add your API key to `wp-config.php`:
 
@@ -42,37 +69,17 @@ define('VIBE_AI_OPENROUTER_KEY', 'sk-or-your-key-here');
 ### Option 2: Build from Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/your-repo/ai-entity-index.git
 cd ai-entity-index
-
-# Run the build script
 ./build.sh
-
-# The zip file will be in dist/ai-entity-index-1.0.0.zip
+# Zip file output: dist/ai-entity-index-1.0.8.zip
 ```
 
 #### Build Requirements
 
 - Composer 2.x
 - Node.js 18+ and npm
-- zip command
-
-## Development Setup
-
-```bash
-# Install PHP dependencies
-composer install
-
-# Install Node dependencies
-npm install
-
-# Start development server (watches for changes)
-npm start
-
-# Or build for production
-npm run build
-```
+- `zip` command
 
 ## Configuration
 
@@ -91,43 +98,98 @@ define('VIBE_AI_ENCRYPTION_KEY', 'random-32-byte-string');
 Base URL: `/wp-json/vibe-ai/v1/`
 
 ### Entity Endpoints
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/status` | Pipeline status |
-| GET | `/entities` | List entities |
-| POST | `/pipeline/start` | Start extraction |
+| GET | `/entities` | List entities (paginated, filterable) |
+| PUT/PATCH | `/entities/{id}` | Update entity |
+| DELETE | `/entities/{id}` | Delete entity |
+| POST | `/entities/merge` | Merge entities |
+| POST | `/pipeline/start` | Start extraction pipeline |
 | POST | `/pipeline/stop` | Stop pipeline |
+| GET | `/settings` | Get plugin settings |
+| POST/PUT/PATCH | `/settings` | Update settings |
+| GET | `/logs` | Get activity logs |
 
 ### Knowledge Base Endpoints
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/kb/status` | KB pipeline status |
+| GET | `/kb/docs` | List indexed documents |
 | POST | `/kb/search` | Semantic search |
-| GET | `/kb/status` | KB status |
-| GET | `/kb/docs` | List documents |
-| POST | `/kb/reindex` | Trigger reindex |
+| POST | `/kb/reindex` | Trigger full reindex |
+| POST/PUT/PATCH | `/kb/pinned-pages` | Update pinned pages |
 
-## Directory Structure
+### AI Publishing Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/llms.txt` | Machine-readable content summary |
+| GET | `/ai-sitemap` | AI-optimized sitemap |
+| GET | `/changes` | Change feed for AI crawlers |
+
+## Architecture
 
 ```
-ai-entity-index/
-├── ai-entity-index.php      # Main plugin file
-├── includes/
-│   ├── Config.php           # Configuration
-│   ├── Activator.php        # Activation/tables
-│   ├── Plugin.php           # Main class
-│   ├── Pipeline/            # Pipeline managers
-│   ├── Jobs/                # Background jobs
-│   ├── Repositories/        # Data access
-│   ├── Services/            # Business logic
-│   └── REST/                # API controllers
-├── admin/js/src/            # React admin UI
-├── vendor/                  # Composer dependencies
-└── build.sh                 # Build script
+Trigger (save_post / manual)
+  → Pipeline Manager (orchestration)
+    → Action Scheduler (background jobs)
+      → AI Client (OpenRouter)
+        → EntityExtractor / KB Chunker
+          → Repository (MySQL)
+            → JSON-LD / Vector Store
 ```
+
+| Layer | Responsibility |
+|-------|---------------|
+| **Trigger** | Hook into WordPress publish/save events |
+| **Pipeline** | Coordinate extraction phases, handle failures |
+| **Action Scheduler** | Queue and run jobs asynchronously |
+| **AI Client** | Communicate with OpenRouter, handle rate limits and retries |
+| **Repository** | CRUD operations against custom tables |
+| **Output** | JSON-LD injection, vector embeddings, AI publishing files |
+
+## Development Setup
+
+```bash
+# Install PHP dependencies
+composer install
+
+# Install Node dependencies
+npm install
+
+# Start development server (watches for changes)
+npm start
+
+# Or build for production
+npm run build
+```
+
+### Useful Commands
+
+| Command | Purpose |
+|---------|---------|
+| `npm start` | Start WP Scripts dev server with hot reload |
+| `npm run build` | Production build of React admin UI |
+| `npm run lint` | Run ESLint on JS/JSX source |
+| `./vendor/bin/phpunit` | Run PHP test suite |
+
+## Documentation
+
+Full documentation lives in the [`docs/`](docs/) directory:
+
+| Document | Description |
+|----------|-------------|
+| [`docs/index.md`](docs/index.md) | Documentation home and navigation |
+| [`docs/api/`](docs/api/) | REST API reference |
+| [`docs/changelog/`](docs/changelog/) | Changelog and implementation drift |
+| [`docs/architecture/`](docs/architecture/) | System architecture and design decisions |
 
 ## License
 
-**PROPRIETARY SOFTWARE - ALL RIGHTS RESERVED**
+**PROPRIETARY SOFTWARE — ALL RIGHTS RESERVED**
 
 Copyright (c) 2026 Vibe Architect. All Rights Reserved.
 

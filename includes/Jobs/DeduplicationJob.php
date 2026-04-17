@@ -52,22 +52,13 @@ class DeduplicationJob {
     }
 
     /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 1);
-    }
-
-    /**
      * Execute the deduplication phase.
      *
      * @param array $args Job arguments containing config.
      * @return void
      */
     public static function execute(array $args = []): void {
-        $config = $args['config'] ?? [];
+        $config = $args['config'] ?? (isset($args['batch_size']) ? $args : []);
         $job = new self();
 
         try {
@@ -499,9 +490,6 @@ class DeduplicationJob {
         ]);
 
         $this->clear_batch_state();
-
-        // Clear extracted entities from previous phase
-        ExtractionJob::clear_extracted_entities();
 
         do_action('vibe_ai_phase_deduplication_complete');
     }

@@ -32,9 +32,10 @@ Index site content for semantic retrieval (RAG): normalize content, chunk, embed
 - `OPTION_STOP_REQUESTED` provides cooperative stop signaling.
 - Semantic search endpoint (`/kb/search`) uses `SimilaritySearch + EmbeddingClient + VectorStore`.
 - Public AI publishing endpoints are available for machine crawlers:
-  - `/kb/llms-txt`
-  - `/kb/sitemap`
-  - `/kb/feed`
+  - `/llms.txt`
+  - `/ai-sitemap`
+  - `/changes`
+  - REST mirrors under `/wp-json/vibe-ai/v1/kb/*`
 
 ## Source refs
 

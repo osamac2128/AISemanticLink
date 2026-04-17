@@ -162,9 +162,9 @@ class KBPipelineManager {
             add_action("vibe_ai_{$phase}_complete", [$this, 'handle_phase_complete']);
         }
 
-        // Hook into post saves for automatic indexing
-        add_action('save_post', [$this, 'on_save_post'], 20, 2);
-        add_action('delete_post', [$this, 'on_delete_post'], 10, 1);
+        add_action('vibe_ai_kb_index_single_post', [$this, 'handleSinglePostIndex'], 10, 1);
+        add_action('vibe_ai_kb_cleanup_post', [$this, 'handleCleanupPost'], 10, 1);
+        add_action('vibe_ai_kb_job_failed', [$this, 'handleJobFailed'], 10, 2);
     }
 
     /**
@@ -329,6 +329,7 @@ class KBPipelineManager {
                 'total'      => 0,
                 'completed'  => 0,
                 'failed'     => 0,
+                'skipped'    => 0,
                 'percentage' => 0,
             ],
             'eta_seconds'       => null,
@@ -405,16 +406,22 @@ class KBPipelineManager {
     public function updateProgress(array $data): void {
         $current = $this->getProgress();
         $updated = wp_parse_args($data, $current);
+        $processed = (int) ($updated['completed'] + $updated['failed'] + $updated['skipped']);
 
         // Calculate overall percentage
         if ($updated['total'] > 0) {
-            $updated['percentage'] = (int) round(($updated['completed'] / $updated['total']) * 100);
+            $updated['percentage'] = (int) round(($processed / $updated['total']) * 100);
         }
 
         // Calculate phase percentage
         if (isset($updated['phase']['total']) && $updated['phase']['total'] > 0) {
+            $phaseProcessed = (int) (
+                ($updated['phase']['completed'] ?? 0)
+                + ($updated['phase']['failed'] ?? 0)
+                + ($updated['phase']['skipped'] ?? 0)
+            );
             $updated['phase']['percentage'] = (int) round(
-                ($updated['phase']['completed'] / $updated['phase']['total']) * 100
+                ($phaseProcessed / $updated['phase']['total']) * 100
             );
         }
 
@@ -440,6 +447,35 @@ class KBPipelineManager {
             $progress['phase'][$type] += $count;
         }
 
+        $this->updateProgress($progress);
+    }
+
+    /**
+     * Record progress for the active phase.
+     *
+     * Top-level progress mirrors the active phase counters so the admin UI can
+     * render the current phase accurately.
+     *
+     * @param int $completed Completed items.
+     * @param int $failed    Failed items.
+     * @param int $skipped   Skipped items.
+     * @return void
+     */
+    public function recordPhaseProgress(int $completed = 0, int $failed = 0, int $skipped = 0): void {
+        $progress = $this->getProgress();
+
+        foreach (['completed' => $completed, 'failed' => $failed, 'skipped' => $skipped] as $key => $value) {
+            if ($value <= 0) {
+                continue;
+            }
+
+            $progress[$key] = max(0, (int) $progress[$key] + $value);
+            if (isset($progress['phase'][$key])) {
+                $progress['phase'][$key] = max(0, (int) $progress['phase'][$key] + $value);
+            }
+        }
+
+        $progress['current_batch'] = (int) $progress['current_batch'] + 1;
         $this->updateProgress($progress);
     }
 
@@ -527,6 +563,69 @@ class KBPipelineManager {
         );
 
         $this->log('debug', 'Scheduled single post for KB indexing', ['post_id' => $postId]);
+    }
+
+    /**
+     * Run a scoped reindex for a single scheduled post.
+     *
+     * @param int $postId Post ID to process.
+     * @return void
+     */
+    public function handleSinglePostIndex(mixed $postId): void {
+        if (is_array($postId)) {
+            $postId = $postId['post_id'] ?? 0;
+        }
+
+        $postId = absint($postId);
+
+        if ($postId <= 0 || !$this->shouldIndexPost($postId)) {
+            return;
+        }
+
+        if ($this->isRunning()) {
+            $this->log('debug', 'Skipping single post index because a pipeline is already running', [
+                'post_id' => $postId,
+            ]);
+            return;
+        }
+
+        $this->reindex_single($postId);
+    }
+
+    /**
+     * Remove a deleted post from the KB.
+     *
+     * @param int $postId Deleted post ID.
+     * @return void
+     */
+    public function handleCleanupPost(mixed $postId): void {
+        if (is_array($postId)) {
+            $postId = $postId['post_id'] ?? 0;
+        }
+
+        $postId = absint($postId);
+
+        if ($postId <= 0) {
+            return;
+        }
+
+        $this->docRepo->deleteByPostId($postId);
+        $this->log('info', 'Removed deleted post from Knowledge Base', ['post_id' => $postId]);
+    }
+
+    /**
+     * Fail the pipeline when a KB job reports an unrecoverable error.
+     *
+     * @param string $job    Job identifier.
+     * @param string $reason Failure reason.
+     * @return void
+     */
+    public function handleJobFailed(string $job, string $reason): void {
+        if (!$this->isRunning()) {
+            return;
+        }
+
+        $this->fail(sprintf('%s: %s', sanitize_text_field($job), sanitize_text_field($reason)));
     }
 
     /**
@@ -638,10 +737,24 @@ class KBPipelineManager {
      * @return void
      */
     public function handle_phase_complete(): void {
+        if (!$this->isRunning()) {
+            return;
+        }
+
+        $currentPhase = (string) get_option(self::OPTION_PHASE, '');
+        if ($currentPhase === '' || current_filter() !== "vibe_ai_{$currentPhase}_complete") {
+            return;
+        }
+
         $progress = $this->getProgress();
+        $phaseProcessed = (int) (
+            ($progress['phase']['completed'] ?? 0)
+            + ($progress['phase']['failed'] ?? 0)
+            + ($progress['phase']['skipped'] ?? 0)
+        );
 
         // Check if phase work is complete
-        if ($progress['phase']['completed'] + $progress['phase']['failed'] >= $progress['phase']['total']) {
+        if ($phaseProcessed >= (int) ($progress['phase']['total'] ?? 0)) {
             $this->advancePhase();
         }
     }
@@ -754,9 +867,10 @@ class KBPipelineManager {
         }
 
         $hook = "vibe_ai_{$phase}";
+        $actionArgs = $this->getPhaseActionArgs($phase, $args);
 
         if (function_exists('as_next_scheduled_action')) {
-            $existing = as_next_scheduled_action($hook, ['config' => $args], self::SCHEDULER_GROUP);
+            $existing = as_next_scheduled_action($hook, $actionArgs, self::SCHEDULER_GROUP);
             if ($existing) {
                 $this->log('debug', 'Skipping duplicate phase schedule', ['phase' => $phase]);
                 return;
@@ -767,7 +881,7 @@ class KBPipelineManager {
         as_schedule_single_action(
             time(),
             $hook,
-            ['config' => $args],
+            $actionArgs,
             self::SCHEDULER_GROUP
         );
 
@@ -786,12 +900,12 @@ class KBPipelineManager {
         // Cancel phase jobs
         foreach (self::PHASES as $phase) {
             $hook = "vibe_ai_{$phase}";
-            as_unschedule_all_actions($hook, [], self::SCHEDULER_GROUP);
+            as_unschedule_all_actions($hook, null, self::SCHEDULER_GROUP);
         }
 
         // Cancel single-post jobs
-        as_unschedule_all_actions('vibe_ai_kb_index_single_post', [], self::SCHEDULER_GROUP);
-        as_unschedule_all_actions('vibe_ai_kb_cleanup_post', [], self::SCHEDULER_GROUP);
+        as_unschedule_all_actions('vibe_ai_kb_index_single_post', null, self::SCHEDULER_GROUP);
+        as_unschedule_all_actions('vibe_ai_kb_cleanup_post', null, self::SCHEDULER_GROUP);
 
         $this->log('info', 'Cancelled all pending KB pipeline jobs');
     }
@@ -846,6 +960,7 @@ class KBPipelineManager {
                 'total'      => $total,
                 'completed'  => 0,
                 'failed'     => 0,
+                'skipped'    => 0,
                 'percentage' => 0,
             ],
             'eta_seconds'       => null,
@@ -866,15 +981,23 @@ class KBPipelineManager {
 
         // Determine phase total based on phase type
         $phase_total = $this->calculatePhaseTotal($phaseName);
+        $batchSize = (int) ($this->getConfig()['batch_size'] ?? Config::BATCH_SIZE);
 
+        $progress['total'] = $phase_total;
+        $progress['completed'] = 0;
+        $progress['failed'] = 0;
+        $progress['skipped'] = 0;
+        $progress['percentage'] = 0;
         $progress['phase'] = [
             'name'       => $phaseName,
             'total'      => $phase_total,
             'completed'  => 0,
             'failed'     => 0,
+            'skipped'    => 0,
             'percentage' => 0,
         ];
         $progress['current_batch'] = 0;
+        $progress['total_batches'] = $batchSize > 0 ? (int) ceil($phase_total / $batchSize) : 0;
 
         update_option(self::OPTION_PROGRESS, $progress, false);
     }
@@ -888,8 +1011,10 @@ class KBPipelineManager {
     private function calculatePhaseTotal(string $phaseName): int {
         global $wpdb;
 
-        $docs_table   = $wpdb->prefix . 'ai_kb_documents';
-        $chunks_table = $wpdb->prefix . 'ai_kb_chunks';
+        $docs_table    = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $chunks_table  = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $vectors_table = $wpdb->prefix . Config::TABLE_KB_VECTORS;
+        $scope_filter  = $this->getScopedDocumentFilter();
 
         switch ($phaseName) {
             case 'kb_document_build':
@@ -908,25 +1033,40 @@ class KBPipelineManager {
                     return 0;
                 }
                 return (int) $wpdb->get_var(
-                    "SELECT COUNT(*) FROM {$docs_table} WHERE status IN ('new', 'updated')"
+                    $wpdb->prepare(
+                        "SELECT COUNT(*) FROM {$docs_table} WHERE status = %s{$scope_filter['sql']}",
+                        ...array_merge([Config::KB_STATUS_PENDING], $scope_filter['args'])
+                    )
                 );
 
             case 'kb_embed_chunks':
                 // Count of chunks pending embedding
-                if ($wpdb->get_var("SHOW TABLES LIKE '{$chunks_table}'") !== $chunks_table) {
+                if (
+                    $wpdb->get_var("SHOW TABLES LIKE '{$chunks_table}'") !== $chunks_table
+                    || $wpdb->get_var("SHOW TABLES LIKE '{$vectors_table}'") !== $vectors_table
+                ) {
                     return 0;
                 }
-                return (int) $wpdb->get_var(
-                    "SELECT COUNT(*) FROM {$chunks_table} WHERE embedding_status = 'pending'"
-                );
+                $query = "SELECT COUNT(*)
+                    FROM {$chunks_table} c
+                    INNER JOIN {$docs_table} d ON c.doc_id = d.id
+                    LEFT JOIN {$vectors_table} v ON c.id = v.chunk_id
+                    WHERE v.id IS NULL{$scope_filter['sql_with_alias']}";
+                if (!empty($scope_filter['args'])) {
+                    return (int) $wpdb->get_var($wpdb->prepare($query, ...$scope_filter['args']));
+                }
+                return (int) $wpdb->get_var($query);
 
             case 'kb_index_upsert':
-                // Count of chunks with embeddings ready for indexing
-                if ($wpdb->get_var("SHOW TABLES LIKE '{$chunks_table}'") !== $chunks_table) {
+                // Count of chunked documents waiting for final verification.
+                if ($wpdb->get_var("SHOW TABLES LIKE '{$docs_table}'") !== $docs_table) {
                     return 0;
                 }
                 return (int) $wpdb->get_var(
-                    "SELECT COUNT(*) FROM {$chunks_table} WHERE embedding_status = 'complete' AND index_status = 'pending'"
+                    $wpdb->prepare(
+                        "SELECT COUNT(*) FROM {$docs_table} WHERE status = %s{$scope_filter['sql']}",
+                        ...array_merge([Config::KB_STATUS_CHUNKED], $scope_filter['args'])
+                    )
                 );
 
             case 'kb_cleanup':
@@ -936,6 +1076,69 @@ class KBPipelineManager {
             default:
                 return 0;
         }
+    }
+
+    /**
+     * Build the Action Scheduler args for a specific phase.
+     *
+     * @param string $phase  Phase name.
+     * @param array  $config Pipeline config.
+     * @return array<string, mixed>
+     */
+    private function getPhaseActionArgs(string $phase, array $config): array {
+        if ($phase === 'kb_document_build') {
+            return [
+                'last_post_id' => 0,
+                'options'      => $config,
+            ];
+        }
+
+        return [];
+    }
+
+    /**
+     * Build a SQL fragment matching the active pipeline scope.
+     *
+     * @return array{sql: string, sql_with_alias: string, args: array<int, int|string>}
+     */
+    private function getScopedDocumentFilter(): array {
+        $config = $this->getConfig();
+        $scope  = (string) ($config['scope'] ?? 'all');
+
+        if ($scope === 'post_id' && !empty($config['post_id'])) {
+            return [
+                'sql'            => ' AND post_id = %d',
+                'sql_with_alias' => ' AND d.post_id = %d',
+                'args'           => [(int) $config['post_id']],
+            ];
+        }
+
+        if ($scope === 'post_type' && !empty($config['post_type'])) {
+            return [
+                'sql'            => ' AND post_type = %s',
+                'sql_with_alias' => ' AND d.post_type = %s',
+                'args'           => [sanitize_text_field((string) $config['post_type'])],
+            ];
+        }
+
+        $postTypes = $config['post_types'] ?? [];
+        if (is_array($postTypes) && !empty($postTypes)) {
+            $sanitized = array_values(array_filter(array_map('sanitize_text_field', $postTypes)));
+            if (!empty($sanitized)) {
+                $placeholders = implode(', ', array_fill(0, count($sanitized), '%s'));
+                return [
+                    'sql'            => " AND post_type IN ({$placeholders})",
+                    'sql_with_alias' => " AND d.post_type IN ({$placeholders})",
+                    'args'           => $sanitized,
+                ];
+            }
+        }
+
+        return [
+            'sql'            => '',
+            'sql_with_alias' => '',
+            'args'           => [],
+        ];
     }
 
     /**

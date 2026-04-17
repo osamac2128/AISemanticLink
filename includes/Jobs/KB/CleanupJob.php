@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vibe\AIIndex\Jobs\KB;
 
 use Vibe\AIIndex\Config;
+use Vibe\AIIndex\Pipeline\KBPipelineManager;
 
 /**
  * KB Phase 5: Remove stale chunks and orphaned data.
@@ -27,15 +28,6 @@ class CleanupJob {
      * Option key for KB statistics.
      */
     private const OPTION_KB_STATS = 'vibe_ai_kb_stats';
-
-    /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 0);
-    }
 
     /**
      * Schedule the cleanup job.
@@ -163,11 +155,10 @@ class CleanupJob {
             'kb_stats' => $kbStats,
         ]);
 
+        KBPipelineManager::get_instance()->recordPhaseProgress(1, 0, 0);
+
         // Fire completion action
         do_action('vibe_ai_kb_cleanup_complete', $stats);
-
-        // Fire pipeline complete action
-        do_action('vibe_ai_kb_pipeline_complete', $kbStats);
     }
 
     /**

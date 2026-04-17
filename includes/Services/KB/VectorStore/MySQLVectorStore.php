@@ -507,6 +507,11 @@ class MySQLVectorStore implements VectorStoreInterface
             $params[] = $filters['date_before'];
         }
 
+        if (!empty($filters['exclude_doc_id'])) {
+            $query .= ' AND c.doc_id != %d';
+            $params[] = (int) $filters['exclude_doc_id'];
+        }
+
         // Limit to max scan
         $query .= sprintf(' LIMIT %d', Config::KB_MAX_SCAN_VECTORS);
 

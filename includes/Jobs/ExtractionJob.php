@@ -15,7 +15,8 @@ use Vibe\AIIndex\Services\EntityExtractor;
  *
  * @package Vibe\AIIndex\Jobs
  */
-class ExtractionJob {
+class ExtractionJob
+{
 
     /**
      * Action hook for this job.
@@ -53,22 +54,14 @@ class ExtractionJob {
     private const META_EXTRACTED = '_vibe_ai_extracted_at';
 
     /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 1);
-    }
-
-    /**
      * Execute the extraction phase.
      *
      * @param array $args Job arguments containing config.
      * @return void
      */
-    public static function execute(array $args = []): void {
-        $config = $args['config'] ?? [];
+    public static function execute(array $args = []): void
+    {
+        $config = $args['config'] ?? (isset($args['batch_size']) ? $args : []);
         $job = new self();
 
         try {
@@ -84,7 +77,8 @@ class ExtractionJob {
      * @param array $config Pipeline configuration.
      * @return void
      */
-    public function run(array $config): void {
+    public function run(array $config): void
+    {
         $pipeline = PipelineManager::get_instance();
 
         // Get queued posts from preparation phase
@@ -115,17 +109,17 @@ class ExtractionJob {
         $total_batches = (int) ceil(count($queued_posts) / $current_batch_size);
 
         $this->log('info', "Processing batch {$batch_number}/{$total_batches}", [
-            'offset'     => $current_offset,
+            'offset' => $current_offset,
             'batch_size' => $current_batch_size,
-            'posts'      => count($batch),
+            'posts' => count($batch),
         ]);
 
         // Update progress
         $pipeline->update_progress([
             'current_batch' => $batch_number,
             'total_batches' => $total_batches,
-            'phase'         => [
-                'total'     => count($queued_posts),
+            'phase' => [
+                'total' => count($queued_posts),
                 'completed' => $current_offset,
             ],
         ]);
@@ -140,12 +134,12 @@ class ExtractionJob {
 
         // Update progress
         $pipeline->update_progress([
-            'completed'        => $current_offset + count($batch),
+            'completed' => $current_offset + count($batch),
             'avg_process_time' => $processing_time / count($batch),
-            'phase'            => [
-                'total'     => count($queued_posts),
+            'phase' => [
+                'total' => count($queued_posts),
                 'completed' => $current_offset + count($batch),
-                'failed'    => $results['failed'],
+                'failed' => $results['failed'],
             ],
         ]);
 
@@ -157,7 +151,7 @@ class ExtractionJob {
 
         // Update batch state
         $this->update_batch_state([
-            'offset'     => $current_offset + count($batch),
+            'offset' => $current_offset + count($batch),
             'batch_size' => $next_batch_size,
         ]);
 
@@ -183,7 +177,8 @@ class ExtractionJob {
      * @param array $batch Batch of prepared posts.
      * @return array Results with 'entities' and 'failed' count.
      */
-    private function process_batch(array $batch): array {
+    private function process_batch(array $batch): array
+    {
         $extractor = $this->get_extractor();
         $all_entities = [];
         $failed = 0;
@@ -193,7 +188,7 @@ class ExtractionJob {
 
             try {
                 // Extract entities using AI
-                $entities = $extractor->extract($post_data['content'], $post_id);
+                $entities = $extractor->extract_from_content($post_data['content']);
 
                 if (!empty($entities)) {
                     foreach ($entities as $entity) {
@@ -213,7 +208,7 @@ class ExtractionJob {
             } catch (\Throwable $e) {
                 $failed++;
                 $this->log('error', "Failed to extract entities from post {$post_id}: " . $e->getMessage(), [
-                    'post_id'   => $post_id,
+                    'post_id' => $post_id,
                     'exception' => get_class($e),
                 ]);
 
@@ -227,7 +222,7 @@ class ExtractionJob {
 
         return [
             'entities' => $all_entities,
-            'failed'   => $failed,
+            'failed' => $failed,
         ];
     }
 
@@ -236,7 +231,8 @@ class ExtractionJob {
      *
      * @return EntityExtractor
      */
-    private function get_extractor(): EntityExtractor {
+    private function get_extractor(): EntityExtractor
+    {
         // Check if service container exists
         if (function_exists('vibe_ai_get_service')) {
             return vibe_ai_get_service(EntityExtractor::class);
@@ -252,7 +248,8 @@ class ExtractionJob {
      * @param array $entities Extracted entities.
      * @return void
      */
-    private function store_extracted_entities(array $entities): void {
+    private function store_extracted_entities(array $entities): void
+    {
         $existing = get_option(self::OPTION_EXTRACTED_ENTITIES, []);
         $updated = array_merge($existing, $entities);
         update_option(self::OPTION_EXTRACTED_ENTITIES, $updated, false);
@@ -263,7 +260,8 @@ class ExtractionJob {
      *
      * @return array Extracted entities.
      */
-    public static function get_extracted_entities(): array {
+    public static function get_extracted_entities(): array
+    {
         return get_option(self::OPTION_EXTRACTED_ENTITIES, []);
     }
 
@@ -272,7 +270,8 @@ class ExtractionJob {
      *
      * @return void
      */
-    public static function clear_extracted_entities(): void {
+    public static function clear_extracted_entities(): void
+    {
         delete_option(self::OPTION_EXTRACTED_ENTITIES);
     }
 
@@ -281,7 +280,8 @@ class ExtractionJob {
      *
      * @return int Entity count.
      */
-    private function count_extracted_entities(): int {
+    private function count_extracted_entities(): int
+    {
         $entities = get_option(self::OPTION_EXTRACTED_ENTITIES, []);
         return count($entities);
     }
@@ -293,7 +293,8 @@ class ExtractionJob {
      * @param int   $current_size Current batch size.
      * @return int Next batch size.
      */
-    private function calculate_next_batch_size(float $avg_process_time, int $current_size): int {
+    private function calculate_next_batch_size(float $avg_process_time, int $current_size): int
+    {
         if ($avg_process_time < 2.0) {
             // Fast processing: increase batch
             return min(self::MAX_BATCH_SIZE, $current_size + 5);
@@ -310,9 +311,10 @@ class ExtractionJob {
      *
      * @return array Batch state.
      */
-    private function get_batch_state(): array {
+    private function get_batch_state(): array
+    {
         return get_option(self::OPTION_BATCH_STATE, [
-            'offset'     => 0,
+            'offset' => 0,
             'batch_size' => self::MIN_BATCH_SIZE,
         ]);
     }
@@ -323,7 +325,8 @@ class ExtractionJob {
      * @param array $state New state.
      * @return void
      */
-    private function update_batch_state(array $state): void {
+    private function update_batch_state(array $state): void
+    {
         $current = $this->get_batch_state();
         $updated = wp_parse_args($state, $current);
         update_option(self::OPTION_BATCH_STATE, $updated, false);
@@ -334,7 +337,8 @@ class ExtractionJob {
      *
      * @return void
      */
-    private function clear_batch_state(): void {
+    private function clear_batch_state(): void
+    {
         delete_option(self::OPTION_BATCH_STATE);
     }
 
@@ -344,7 +348,8 @@ class ExtractionJob {
      * @param array $config Pipeline configuration.
      * @return void
      */
-    private function schedule_next_batch(array $config): void {
+    private function schedule_next_batch(array $config): void
+    {
         as_schedule_single_action(
             time() + 1, // Small delay between batches
             self::HOOK,
@@ -361,7 +366,8 @@ class ExtractionJob {
      * @param \Throwable $e Exception.
      * @return bool True if rate limit error.
      */
-    private function is_rate_limit_error(\Throwable $e): bool {
+    private function is_rate_limit_error(\Throwable $e): bool
+    {
         $message = strtolower($e->getMessage());
         return strpos($message, 'rate limit') !== false
             || strpos($message, '429') !== false
@@ -374,7 +380,8 @@ class ExtractionJob {
      * @param \Throwable $e Exception.
      * @return void
      */
-    private function handle_rate_limit(\Throwable $e): void {
+    private function handle_rate_limit(\Throwable $e): void
+    {
         $this->log('warning', 'Rate limit hit, backing off', [
             'message' => $e->getMessage(),
         ]);
@@ -388,20 +395,21 @@ class ExtractionJob {
      * @param \Throwable $e Exception.
      * @return void
      */
-    private function handle_error(\Throwable $e): void {
+    private function handle_error(\Throwable $e): void
+    {
         // Don't fail the whole pipeline on rate limits
         if ($this->is_rate_limit_error($e)) {
             $this->log('warning', 'Extraction paused due to rate limit', [
                 'message' => $e->getMessage(),
             ]);
-            return;
+            throw $e;
         }
 
         $this->log('error', 'Extraction phase failed: ' . $e->getMessage(), [
             'exception' => get_class($e),
-            'file'      => $e->getFile(),
-            'line'      => $e->getLine(),
-            'trace'     => $e->getTraceAsString(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString(),
         ]);
 
         PipelineManager::get_instance()->fail(
@@ -418,7 +426,8 @@ class ExtractionJob {
      * @param array  $context Additional context.
      * @return void
      */
-    private function log(string $level, string $message, array $context = []): void {
+    private function log(string $level, string $message, array $context = []): void
+    {
         if (function_exists('vibe_ai_log')) {
             vibe_ai_log($level, '[Extraction] ' . $message, $context);
         }

@@ -21,16 +21,6 @@ use Vibe\AIIndex\Config;
 class Chunker
 {
     /**
-     * Default target tokens per chunk.
-     */
-    private const DEFAULT_TARGET_TOKENS = 512;
-
-    /**
-     * Default overlap tokens between chunks.
-     */
-    private const DEFAULT_OVERLAP_TOKENS = 50;
-
-    /**
      * Minimum chunk size in tokens.
      */
     private const MIN_CHUNK_TOKENS = 50;
@@ -84,8 +74,8 @@ class Chunker
     ) {
         $this->tokenEstimator = $tokenEstimator;
         $this->anchorGenerator = $anchorGenerator;
-        $this->targetTokens = $targetTokens ?? self::DEFAULT_TARGET_TOKENS;
-        $this->overlapTokens = $overlapTokens ?? self::DEFAULT_OVERLAP_TOKENS;
+        $this->targetTokens = $targetTokens ?? Config::KB_CHUNK_TOKENS_TARGET;
+        $this->overlapTokens = $overlapTokens ?? Config::KB_CHUNK_OVERLAP_TOKENS;
     }
 
     /**

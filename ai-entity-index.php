@@ -3,7 +3,7 @@
  * Plugin Name: AI Entity Index
  * Plugin URI: https://vibeai.dev/ai-entity-index
  * Description: Semantic Truth Layer for WordPress - Extract, normalize, and link named entities with Schema.org JSON-LD output
- * Version: 1.0.6
+ * Version: 1.0.8
  * Requires PHP: 8.1
  * Requires at least: 6.0
  * Author: Vibe Architect
@@ -27,7 +27,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Plugin constants
-define('VIBE_AI_VERSION', '1.0.6');
+define('VIBE_AI_VERSION', '1.0.8');
 define('VIBE_AI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('VIBE_AI_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('VIBE_AI_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -74,7 +74,7 @@ add_filter('cron_schedules', function ($schedules) {
     if (!isset($schedules['every_minute'])) {
         $schedules['every_minute'] = [
             'interval' => 60,
-            'display'  => __('Every minute', 'ai-entity-index'),
+            'display' => __('Every minute', 'ai-entity-index'),
         ];
     }
     return $schedules;
@@ -139,11 +139,14 @@ register_deactivation_hook(__FILE__, function () {
     }
 });
 
+// Uninstall hook
+register_uninstall_hook(__FILE__, [\Vibe\AIIndex\Activator::class, 'uninstall']);
+
 /**
  * Add settings link to plugins page
  */
 add_filter('plugin_action_links_' . VIBE_AI_PLUGIN_BASENAME, function ($links) {
-    $settings_link = '<a href="' . admin_url('admin.php?page=ai-entity-index') . '">' .
+    $settings_link = '<a href="' . admin_url('admin.php?page=vibe-ai-index') . '">' .
         esc_html__('Settings', 'ai-entity-index') . '</a>';
     array_unshift($links, $settings_link);
     return $links;

@@ -17,6 +17,7 @@ use Vibe\AIIndex\Config;
 use Vibe\AIIndex\Logger;
 use Vibe\AIIndex\Repositories\EntityRepository;
 use Vibe\AIIndex\Pipeline\PipelineManager;
+use Vibe\AIIndex\Services\SemanticHealthService;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
@@ -57,6 +58,13 @@ class RestController
      * @var PipelineManager|null
      */
     private ?PipelineManager $pipelineManager = null;
+
+    /**
+     * Semantic health reporting service instance.
+     *
+     * @var SemanticHealthService|null
+     */
+    private ?SemanticHealthService $semanticHealthService = null;
 
     /**
      * Initialize the REST controller.
@@ -176,6 +184,122 @@ class RestController
                         ],
                         'validate_callback' => [$this, 'validate_source_ids'],
                         'sanitize_callback' => [$this, 'sanitize_integer_array'],
+                    ],
+                ],
+            ],
+        ]);
+
+        // =================================================================
+        // Entity Mentions Endpoint
+        // =================================================================
+
+        register_rest_route($this->namespace, '/entities/(?P<id>[\d]+)/mentions', [
+            [
+                'methods' => WP_REST_Server::READABLE,
+                'callback' => [$this, 'get_entity_mentions'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+                'args' => [
+                    'id' => [
+                        'description' => __('Unique identifier for the entity.', 'ai-entity-index'),
+                        'type' => 'integer',
+                        'required' => true,
+                        'validate_callback' => [$this, 'validate_positive_integer'],
+                        'sanitize_callback' => 'absint',
+                    ],
+                ],
+            ],
+        ]);
+
+        // =================================================================
+        // Entity Propagation Endpoint
+        // =================================================================
+
+        register_rest_route($this->namespace, '/entities/(?P<id>[\d]+)/propagate', [
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'propagate_entity'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+                'args' => [
+                    'id' => [
+                        'description' => __('Unique identifier for the entity.', 'ai-entity-index'),
+                        'type' => 'integer',
+                        'required' => true,
+                        'validate_callback' => [$this, 'validate_positive_integer'],
+                        'sanitize_callback' => 'absint',
+                    ],
+                ],
+            ],
+        ]);
+
+        // =================================================================
+        // Entity Force-Sync Endpoint
+        // =================================================================
+
+        register_rest_route($this->namespace, '/entities/(?P<id>[\d]+)/force-sync', [
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'force_sync_entity'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+                'args' => [
+                    'id' => [
+                        'description' => __('Unique identifier for the entity.', 'ai-entity-index'),
+                        'type' => 'integer',
+                        'required' => true,
+                        'validate_callback' => [$this, 'validate_positive_integer'],
+                        'sanitize_callback' => 'absint',
+                    ],
+                ],
+            ],
+        ]);
+
+        // =================================================================
+        // Bulk Entity Delete Endpoint
+        // =================================================================
+
+        register_rest_route($this->namespace, '/entities/bulk-delete', [
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'bulk_delete_entities'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+                'args' => [
+                    'entity_ids' => [
+                        'description' => __('Array of entity IDs to delete.', 'ai-entity-index'),
+                        'type' => 'array',
+                        'required' => true,
+                        'items' => [
+                            'type' => 'integer',
+                        ],
+                        'sanitize_callback' => [$this, 'sanitize_integer_array'],
+                    ],
+                ],
+            ],
+        ]);
+
+        // =================================================================
+        // Bulk Entity Status Update Endpoint
+        // =================================================================
+
+        register_rest_route($this->namespace, '/entities/bulk-status', [
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'bulk_update_status'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+                'args' => [
+                    'entity_ids' => [
+                        'description' => __('Array of entity IDs to update.', 'ai-entity-index'),
+                        'type' => 'array',
+                        'required' => true,
+                        'items' => [
+                            'type' => 'integer',
+                        ],
+                        'sanitize_callback' => [$this, 'sanitize_integer_array'],
+                    ],
+                    'status' => [
+                        'description' => __('New status for the entities.', 'ai-entity-index'),
+                        'type' => 'string',
+                        'required' => true,
+                        'enum' => Config::VALID_STATUSES,
+                        'sanitize_callback' => 'sanitize_text_field',
                     ],
                 ],
             ],
@@ -633,28 +757,50 @@ class RestController
         $status = $pipeline->get_status();
         $repository = $this->get_entity_repository();
         $stats = $repository->get_stats();
+        $progress = $pipeline->get_progress();
+        $config = $pipeline->get_config();
+
+        global $wpdb;
+        $post_types = apply_filters('vibe_ai_post_types', Config::DEFAULT_POST_TYPES);
+        $placeholders = implode(',', array_fill(0, count($post_types), '%s'));
+        $posts_total = (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type IN ({$placeholders}) AND post_status = 'publish'",
+                ...$post_types
+            )
+        );
+        $posts_processed = (int) $wpdb->get_var(
+            "SELECT COUNT(DISTINCT post_id) FROM {$wpdb->postmeta} WHERE meta_key = '_vibe_ai_extracted_at'"
+        );
+        $semanticHealth = $this->get_semantic_health_service()->get_report();
 
         $response_data = [
-            'status' => $status['status'],
-            'current_phase' => $status['current_phase'] ?: null,
-            'progress' => [
-                'total' => $status['progress']['total'],
-                'completed' => $status['progress']['completed'],
-                'failed' => $status['progress']['failed'],
-                'percentage' => $status['progress']['percentage'],
+            'pipeline' => [
+                'running'         => $status['status'] === 'running',
+                'status'          => $status['status'],
+                'phase'           => $status['current_phase'] ?: null,
+                'progress'        => $progress['percentage'],
+                'total_items'     => $progress['total'],
+                'processed_items' => $progress['completed'],
+                'failed_items'    => $progress['failed'],
+                'started_at'      => $config['started_at'] ?? null,
+                'eta'             => $progress['eta_seconds'] ?? null,
+                'error'           => null,
             ],
             'stats' => [
-                'total_entities' => $stats['total_entities'],
-                'total_mentions' => $stats['total_mentions'],
-                'avg_confidence' => $stats['avg_confidence'],
+                'total_entities'  => $stats['total_entities'],
+                'total_mentions'  => $stats['total_mentions'],
+                'avg_confidence'  => $stats['avg_confidence'],
+                'posts_pending'   => max(0, $posts_total - $posts_processed),
+                'posts_processed' => $posts_processed,
             ],
-            'last_activity' => $status['last_activity'] ?: null,
+            'last_activity'        => $status['last_activity'] ?: null,
             'propagating_entities' => $status['propagating_entities'] ?? [],
+            'semantic_health'      => $semanticHealth,
         ];
 
         $response = rest_ensure_response($response_data);
 
-        // Add HATEOAS links
         $response->add_links($this->get_status_links());
 
         return $response;
@@ -1292,18 +1438,36 @@ class RestController
      */
     public function get_settings(WP_REST_Request $request): WP_REST_Response
     {
+        $postTypesObjects = get_post_types(['public' => true], 'objects');
+        $availablePostTypes = array_values(array_map(
+            static function ($postType) {
+                return [
+                    'name'        => $postType->name,
+                    'label'       => $postType->labels->singular_name ?? $postType->label ?? $postType->name,
+                    'description' => $postType->description ?? '',
+                ];
+            },
+            $postTypesObjects
+        ));
+
         $settings = [
             'api_key_configured' => defined('VIBE_AI_OPENROUTER_KEY') && !empty(VIBE_AI_OPENROUTER_KEY),
+            'ai_model'           => (string) get_option('vibe_ai_model', Config::DEFAULT_MODEL),
             'default_post_types' => Config::DEFAULT_POST_TYPES,
-            'supported_post_types' => get_post_types(['public' => true], 'names'),
-            'extraction_model' => Config::DEFAULT_MODEL,
-            'embedding_model' => Config::KB_EMBEDDING_MODEL,
-            'chunk_size' => Config::KB_CHUNK_TOKENS_TARGET,
-            'chunk_overlap' => Config::KB_CHUNK_OVERLAP_TOKENS,
-            'batch_size' => Config::BATCH_SIZE,
-            'polling_interval' => Config::POLLING_INTERVAL_MS,
-            'max_retries' => Config::RETRY_ATTEMPTS,
-            'version' => VIBE_AI_VERSION ?? '1.0.0',
+            'post_types'         => get_option('vibe_ai_post_types', Config::DEFAULT_POST_TYPES),
+            'available_post_types' => $availablePostTypes,
+            'supported_post_types' => array_keys($postTypesObjects),
+            'extraction_model'   => (string) get_option('vibe_ai_model', Config::DEFAULT_MODEL),
+            'embedding_model'    => (string) get_option('vibe_ai_kb_embedding_model', Config::KB_EMBEDDING_MODEL),
+            'chunk_size'         => (int) get_option('vibe_ai_kb_chunk_size', Config::KB_CHUNK_TOKENS_TARGET),
+            'chunk_overlap'      => (int) get_option('vibe_ai_kb_chunk_overlap', Config::KB_CHUNK_OVERLAP_TOKENS),
+            'batch_size'         => (int) get_option('vibe_ai_batch_size', Config::BATCH_SIZE),
+            'confidence_threshold' => (float) get_option('vibe_ai_confidence_threshold', Config::SCHEMA_MIN_CONFIDENCE),
+            'logging_enabled'    => (bool) get_option('vibe_ai_logging_enabled', true),
+            'log_level'          => (string) get_option('vibe_ai_log_level', 'info'),
+            'polling_interval'   => Config::POLLING_INTERVAL_MS,
+            'max_retries'        => Config::RETRY_ATTEMPTS,
+            'version'            => VIBE_AI_VERSION ?? '1.0.0',
         ];
 
         return rest_ensure_response(['settings' => $settings]);
@@ -1317,13 +1481,305 @@ class RestController
      */
     public function update_settings(WP_REST_Request $request): WP_REST_Response
     {
-        // Currently settings are mostly defined in Config, so we just return success
-        // In the future, this could update wp_options for configurable settings
         $this->logger->info('Settings update requested', ['user_id' => get_current_user_id()]);
+
+        $updatable = [
+            'vibe_ai_model' => ['type' => 'string', 'sanitize' => 'sanitize_text_field'],
+            'vibe_ai_batch_size' => ['type' => 'int', 'sanitize' => 'absint', 'min' => 5, 'max' => 50],
+            'vibe_ai_confidence_threshold' => ['type' => 'float', 'sanitize' => 'floatval', 'min' => 0.40, 'max' => 0.95],
+            'vibe_ai_post_types' => ['type' => 'array'],
+            'vibe_ai_logging_enabled' => ['type' => 'bool'],
+            'vibe_ai_log_level' => ['type' => 'string', 'sanitize' => 'sanitize_text_field'],
+        ];
+
+        $updated = [];
+        foreach ($updatable as $key => $spec) {
+            $value = $request->get_param($key);
+            if ($value === null) {
+                continue;
+            }
+
+            if ($spec['type'] === 'int') {
+                $value = call_user_func($spec['sanitize'], $value);
+                if (isset($spec['min'])) {
+                    $value = max($spec['min'], $value);
+                }
+                if (isset($spec['max'])) {
+                    $value = min($spec['max'], $value);
+                }
+            } elseif ($spec['type'] === 'float') {
+                $value = call_user_func($spec['sanitize'], $value);
+                if (isset($spec['min'])) {
+                    $value = max($spec['min'], $value);
+                }
+                if (isset($spec['max'])) {
+                    $value = min($spec['max'], $value);
+                }
+            } elseif ($spec['type'] === 'bool') {
+                $value = (bool) $value;
+            } elseif ($spec['type'] === 'array') {
+                $value = is_array($value) ? array_map('sanitize_text_field', $value) : [];
+            } else {
+                $value = call_user_func($spec['sanitize'], $value);
+            }
+
+            update_option($key, $value);
+            $updated[$key] = $value;
+        }
 
         return rest_ensure_response([
             'success' => true,
-            'message' => __('Settings are primarily configured via wp-config.php constants.', 'ai-entity-index'),
+            'updated' => $updated,
+        ]);
+    }
+
+    // =========================================================================
+    // Entity Mentions, Propagation, Force-Sync, Bulk Operations
+    // =========================================================================
+
+    /**
+     * GET /entities/{id}/mentions
+     * Get mentions for a specific entity.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response|WP_Error The response object or error.
+     */
+    public function get_entity_mentions(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $id = (int) $request->get_param('id');
+        $repository = $this->get_entity_repository();
+
+        $entity = $repository->get_entity($id);
+        if ($entity === null) {
+            return new WP_Error(
+                'rest_entity_not_found',
+                __('Entity not found.', 'ai-entity-index'),
+                ['status' => 404]
+            );
+        }
+
+        $mentions = $repository->get_mentions_for_entity($id);
+
+        $related_posts = array_map(function ($mention) {
+            return [
+                'post_id' => (int) $mention->post_id,
+                'post_title' => $mention->post_title ?? '',
+                'post_status' => $mention->post_status ?? '',
+                'confidence' => (float) $mention->confidence,
+                'context_snippet' => $mention->context_snippet ?? '',
+                'is_primary' => (bool) $mention->is_primary,
+                '_links' => [
+                    'post' => [
+                        'href' => get_permalink((int) $mention->post_id),
+                    ],
+                    'edit' => [
+                        'href' => get_edit_post_link((int) $mention->post_id, 'raw'),
+                    ],
+                ],
+            ];
+        }, $mentions);
+
+        return rest_ensure_response([
+            'mentions' => $related_posts,
+            'total' => count($related_posts),
+        ]);
+    }
+
+    /**
+     * POST /entities/{id}/propagate
+     * Trigger propagation for an entity.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response|WP_Error The response object or error.
+     */
+    public function propagate_entity(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $id = (int) $request->get_param('id');
+        $repository = $this->get_entity_repository();
+
+        $entity = $repository->get_entity($id);
+        if ($entity === null) {
+            return new WP_Error(
+                'rest_entity_not_found',
+                __('Entity not found.', 'ai-entity-index'),
+                ['status' => 404]
+            );
+        }
+
+        do_action('vibe_ai_entity_updated', $id, ['name' => true, 'schema_type' => true]);
+
+        $this->logger->info('Entity propagation triggered via REST API', ['entity_id' => $id]);
+
+        return rest_ensure_response([
+            'success' => true,
+            'message' => __('Entity propagation scheduled.', 'ai-entity-index'),
+            'entity_id' => $id,
+        ]);
+    }
+
+    /**
+     * POST /entities/{id}/force-sync
+     * Force re-extraction of schema for all posts linked to an entity.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response|WP_Error The response object or error.
+     */
+    public function force_sync_entity(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $id = (int) $request->get_param('id');
+        $repository = $this->get_entity_repository();
+
+        $entity = $repository->get_entity($id);
+        if ($entity === null) {
+            return new WP_Error(
+                'rest_entity_not_found',
+                __('Entity not found.', 'ai-entity-index'),
+                ['status' => 404]
+            );
+        }
+
+        $mentions = $repository->get_mentions_for_entity($id);
+        $synced = 0;
+
+        foreach ($mentions as $mention) {
+            $post_id = (int) $mention->post_id;
+            delete_post_meta($post_id, Config::META_SCHEMA_CACHE);
+            delete_post_meta($post_id, Config::META_SCHEMA_VERSION);
+            update_post_meta($post_id, '_vibe_ai_needs_extraction', true);
+            $synced++;
+        }
+
+        $this->logger->info('Entity force-sync triggered', [
+            'entity_id' => $id,
+            'posts_synced' => $synced,
+        ]);
+
+        return rest_ensure_response([
+            'success' => true,
+            'message' => sprintf(
+                __('Force-sync scheduled for %d posts.', 'ai-entity-index'),
+                $synced
+            ),
+            'entity_id' => $id,
+            'posts_affected' => $synced,
+        ]);
+    }
+
+    /**
+     * POST /entities/bulk-delete
+     * Bulk delete entities.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response|WP_Error The response object or error.
+     */
+    public function bulk_delete_entities(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $entity_ids = $request->get_param('entity_ids');
+        if (!is_array($entity_ids) || empty($entity_ids)) {
+            return new WP_Error(
+                'rest_invalid_param',
+                __('entity_ids must be a non-empty array.', 'ai-entity-index'),
+                ['status' => 400]
+            );
+        }
+
+        $repository = $this->get_entity_repository();
+        $deleted = [];
+        $failed = [];
+
+        foreach ($entity_ids as $entity_id) {
+            $id = (int) $entity_id;
+            $entity = $repository->get_entity($id);
+
+            if ($entity === null) {
+                $failed[] = $id;
+                continue;
+            }
+
+            $success = $repository->delete_entity($id);
+            if ($success) {
+                $deleted[] = $id;
+            } else {
+                $failed[] = $id;
+            }
+        }
+
+        $this->logger->info('Bulk entity delete', [
+            'deleted' => count($deleted),
+            'failed' => count($failed),
+        ]);
+
+        return rest_ensure_response([
+            'success' => empty($failed),
+            'deleted' => $deleted,
+            'failed' => $failed,
+            'deleted_count' => count($deleted),
+            'failed_count' => count($failed),
+        ]);
+    }
+
+    /**
+     * POST /entities/bulk-status
+     * Bulk update entity statuses.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response|WP_Error The response object or error.
+     */
+    public function bulk_update_status(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $entity_ids = $request->get_param('entity_ids');
+        $status = $request->get_param('status');
+
+        if (!is_array($entity_ids) || empty($entity_ids)) {
+            return new WP_Error(
+                'rest_invalid_param',
+                __('entity_ids must be a non-empty array.', 'ai-entity-index'),
+                ['status' => 400]
+            );
+        }
+
+        if (!Config::isValidStatus($status)) {
+            return new WP_Error(
+                'rest_invalid_param',
+                __('Invalid status value.', 'ai-entity-index'),
+                ['status' => 400]
+            );
+        }
+
+        $repository = $this->get_entity_repository();
+        $updated = [];
+        $failed = [];
+
+        foreach ($entity_ids as $entity_id) {
+            $id = (int) $entity_id;
+            $entity = $repository->get_entity($id);
+
+            if ($entity === null) {
+                $failed[] = $id;
+                continue;
+            }
+
+            $success = $repository->update_entity($id, ['status' => $status]);
+            if ($success) {
+                $updated[] = $id;
+            } else {
+                $failed[] = $id;
+            }
+        }
+
+        $this->logger->info('Bulk entity status update', [
+            'status' => $status,
+            'updated' => count($updated),
+            'failed' => count($failed),
+        ]);
+
+        return rest_ensure_response([
+            'success' => empty($failed),
+            'status' => $status,
+            'updated' => $updated,
+            'failed' => $failed,
+            'updated_count' => count($updated),
+            'failed_count' => count($failed),
         ]);
     }
 
@@ -1357,6 +1813,20 @@ class RestController
         }
 
         return $this->pipelineManager;
+    }
+
+    /**
+     * Get semantic health service instance (lazy loading).
+     *
+     * @return SemanticHealthService The reporting service instance.
+     */
+    private function get_semantic_health_service(): SemanticHealthService
+    {
+        if ($this->semanticHealthService === null) {
+            $this->semanticHealthService = new SemanticHealthService();
+        }
+
+        return $this->semanticHealthService;
     }
 
     /**

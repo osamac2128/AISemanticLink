@@ -157,8 +157,8 @@ class AISitemapGenerator
     public function getIndexedPages(): array
     {
         $documents = $this->docRepo->getAllDocuments([
-            'limit'   => 10000, // High limit for sitemap
-            'orderby' => 'post_modified',
+            'limit'   => 10000,
+            'orderby' => 'updated_at',
             'order'   => 'DESC',
         ]);
 

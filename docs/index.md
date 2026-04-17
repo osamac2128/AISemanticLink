@@ -21,6 +21,7 @@ AI Entity Index is a WordPress plugin that builds two parallel AI-facing systems
   - `docs/architecture/entity-pipeline.md`
   - `docs/architecture/kb-pipeline.md`
   - `docs/architecture/component-map.md`
+  - `docs/architecture/admin-ui.md`
 - Data model
   - `docs/data-model/schema.md`
   - `docs/data-model/options-and-meta.md`
@@ -36,10 +37,17 @@ AI Entity Index is a WordPress plugin that builds two parallel AI-facing systems
   - `docs/operations/logging-monitoring.md`
   - `docs/operations/performance-and-scaling.md`
   - `docs/operations/recovery-playbooks.md`
+- Guides
+  - `docs/guides/user-guide.md`
+  - `docs/guides/troubleshooting.md`
+  - `docs/guides/migration-guide.md`
+  - `docs/guides/glossary.md`
 - Development
   - `docs/development/local-setup.md`
   - `docs/development/build-test-release.md`
+  - `docs/development/testing.md`
 - Changelog / drift tracking
+  - `docs/changelog/CHANGELOG.md`
   - `docs/changelog/internal-history.md`
   - `docs/changelog/implementation-drift.md`
 
@@ -52,6 +60,8 @@ Use these files as canonical implementation references when updating docs:
 - Entity pipeline: `includes/Pipeline/PipelineManager.php`, `includes/Jobs/*.php`
 - KB pipeline: `includes/Pipeline/KBPipelineManager.php`, `includes/Jobs/KB/*.php`
 - REST: `includes/REST/RestController.php`, `includes/REST/KBController.php`
+- Admin UI: `admin/js/src/App.jsx`, `admin/js/src/api/client.js`, `admin/js/src/components/*/`
+- Root docs: `README.md`, `CONTRIBUTING.md`
 
 ## Documentation maintenance
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vibe\AIIndex\Jobs\KB;
 
 use Vibe\AIIndex\Config;
+use Vibe\AIIndex\Pipeline\KBPipelineManager;
 
 /**
  * KB Phase 4: Finalize indexing, update document status.
@@ -43,15 +44,6 @@ class IndexUpsertJob {
     private const META_DOC_ID = '_vibe_ai_kb_doc_id';
 
     /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 1);
-    }
-
-    /**
      * Schedule the index upsert job.
      *
      * @param int $lastDocId Last processed document ID.
@@ -72,8 +64,9 @@ class IndexUpsertJob {
      * @param int $lastDocId Last processed document ID.
      * @return void
      */
-    public static function execute(int $lastDocId = 0): void {
+    public static function execute(mixed $lastDocId = 0): void {
         $job = new self();
+        $lastDocId = $job->normalizeExecutionArg($lastDocId, 'last_doc_id');
 
         try {
             $job->run($lastDocId);
@@ -99,34 +92,34 @@ class IndexUpsertJob {
         $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
         $chunksTable = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
         $vectorsTable = $wpdb->prefix . Config::TABLE_KB_VECTORS;
+        $manager = KBPipelineManager::get_instance();
+        $scope = $this->getScopedDocumentFilter();
 
         $this->log('info', 'Index upsert phase started', [
             'last_doc_id' => $lastDocId,
         ]);
 
         // Get documents that are chunked but not yet indexed
+        $query = "SELECT id, post_id, chunk_count
+            FROM {$docsTable}
+            WHERE status = %s
+            AND id > %d{$scope['sql']}
+            ORDER BY id ASC
+            LIMIT %d";
         $docs = $wpdb->get_results($wpdb->prepare(
-            "SELECT id, post_id, chunk_count
-             FROM {$docsTable}
-             WHERE status = 'chunked'
-             AND id > %d
-             ORDER BY id ASC
-             LIMIT %d",
-            $lastDocId,
-            self::BATCH_SIZE
+            $query,
+            ...array_merge([Config::KB_STATUS_CHUNKED, $lastDocId], $scope['args'], [self::BATCH_SIZE])
         ));
 
         if (empty($docs)) {
             $this->log('info', 'Index upsert phase complete - no more documents to verify');
             $this->clearBatchState();
             do_action('vibe_ai_kb_index_upsert_complete');
-            $this->advanceToNextPhase();
             return;
         }
 
         $indexedCount = 0;
-        $pendingCount = 0;
-        $warningCount = 0;
+        $failedCount = 0;
         $maxDocId = $lastDocId;
 
         foreach ($docs as $doc) {
@@ -157,7 +150,7 @@ class IndexUpsertJob {
                 $wpdb->update(
                     $docsTable,
                     [
-                        'status'          => 'indexed',
+                        'status'          => Config::KB_STATUS_INDEXED,
                         'last_indexed_at' => $now,
                         'updated_at'      => $now,
                     ],
@@ -181,8 +174,18 @@ class IndexUpsertJob {
                 do_action('vibe_ai_kb_document_indexed', $postId);
 
             } elseif ($vectorizedChunks < $totalChunks) {
-                // Some chunks missing vectors - keep pending
-                $pendingCount++;
+                $wpdb->update(
+                    $docsTable,
+                    [
+                        'status'     => Config::KB_STATUS_ERROR,
+                        'updated_at' => current_time('mysql', true),
+                    ],
+                    ['id' => $docId],
+                    ['%s', '%s'],
+                    ['%d']
+                );
+
+                $failedCount++;
 
                 $this->log('warning', "Document {$docId} has missing vectors", [
                     'post_id'          => $postId,
@@ -191,16 +194,24 @@ class IndexUpsertJob {
                     'missing'          => $totalChunks - $vectorizedChunks,
                 ]);
 
-                $warningCount++;
-
             } else {
-                // No chunks at all - something went wrong
+                $wpdb->update(
+                    $docsTable,
+                    [
+                        'status'     => Config::KB_STATUS_ERROR,
+                        'updated_at' => current_time('mysql', true),
+                    ],
+                    ['id' => $docId],
+                    ['%s', '%s'],
+                    ['%d']
+                );
+
                 $this->log('error', "Document {$docId} has no chunks", [
                     'post_id'        => $postId,
                     'expected'       => $expectedChunks,
                 ]);
 
-                $warningCount++;
+                $failedCount++;
             }
         }
 
@@ -209,25 +220,21 @@ class IndexUpsertJob {
         $this->updateBatchState([
             'last_doc_id'    => $maxDocId,
             'indexed_count'  => ($state['indexed_count'] ?? 0) + $indexedCount,
-            'pending_count'  => $pendingCount,
-            'warning_count'  => ($state['warning_count'] ?? 0) + $warningCount,
+            'pending_count'  => 0,
+            'warning_count'  => ($state['warning_count'] ?? 0) + $failedCount,
         ]);
 
         $this->log('info', "Processed batch", [
             'docs_checked' => count($docs),
             'indexed'      => $indexedCount,
-            'pending'      => $pendingCount,
-            'warnings'     => $warningCount,
+            'failed'       => $failedCount,
             'last_doc_id'  => $maxDocId,
         ]);
 
-        // Fire batch action
-        do_action('vibe_ai_kb_index_upsert_batch', $indexedCount, $pendingCount);
+        $manager->recordPhaseProgress($indexedCount, $failedCount, 0);
 
-        // If there are still pending documents, we might need to wait for embeddings
-        if ($pendingCount > 0) {
-            $this->log('info', "Some documents still pending vectorization");
-        }
+        // Fire batch action
+        do_action('vibe_ai_kb_index_upsert_batch', $indexedCount, $failedCount);
 
         // Schedule next batch
         $this->scheduleNextBatch($maxDocId);
@@ -245,6 +252,61 @@ class IndexUpsertJob {
             'pending_count'  => 0,
             'warning_count'  => 0,
         ]);
+    }
+
+    /**
+     * Normalize Action Scheduler arguments across old and new payload shapes.
+     *
+     * @param mixed  $value Legacy or direct argument value.
+     * @param string $key   Expected associative key.
+     * @return int
+     */
+    private function normalizeExecutionArg(mixed $value, string $key): int {
+        if (is_array($value)) {
+            $value = $value[$key] ?? 0;
+        }
+
+        return (int) $value;
+    }
+
+    /**
+     * Get the active pipeline's scope filter for document queries.
+     *
+     * @return array{sql: string, args: array<int, int|string>}
+     */
+    private function getScopedDocumentFilter(): array {
+        $config = KBPipelineManager::get_instance()->getConfig();
+        $scope  = (string) ($config['scope'] ?? 'all');
+
+        if ($scope === 'post_id' && !empty($config['post_id'])) {
+            return [
+                'sql'  => ' AND post_id = %d',
+                'args' => [(int) $config['post_id']],
+            ];
+        }
+
+        if ($scope === 'post_type' && !empty($config['post_type'])) {
+            return [
+                'sql'  => ' AND post_type = %s',
+                'args' => [sanitize_text_field((string) $config['post_type'])],
+            ];
+        }
+
+        $postTypes = $config['post_types'] ?? [];
+        if (is_array($postTypes) && !empty($postTypes)) {
+            $sanitized = array_values(array_filter(array_map('sanitize_text_field', $postTypes)));
+            if (!empty($sanitized)) {
+                return [
+                    'sql'  => ' AND post_type IN (' . implode(', ', array_fill(0, count($sanitized), '%s')) . ')',
+                    'args' => $sanitized,
+                ];
+            }
+        }
+
+        return [
+            'sql'  => '',
+            'args' => [],
+        ];
     }
 
     /**
@@ -283,16 +345,6 @@ class IndexUpsertJob {
         );
 
         $this->log('debug', 'Next index upsert batch scheduled');
-    }
-
-    /**
-     * Advance to the next phase (CleanupJob).
-     *
-     * @return void
-     */
-    private function advanceToNextPhase(): void {
-        CleanupJob::schedule();
-        $this->log('info', 'Advancing to cleanup phase');
     }
 
     /**

@@ -114,7 +114,7 @@ class Config
     // =================================================================
 
     /** @var int Schema cache version for invalidation */
-    public const SCHEMA_CACHE_VERSION = 1;
+    public const SCHEMA_CACHE_VERSION = 2;
 
     /** @var int Propagation timeout in seconds (1 hour) */
     public const PROPAGATION_TIMEOUT = 3600;
@@ -324,6 +324,9 @@ class Config
 
     /** @var string KB document status: pending processing */
     public const KB_STATUS_PENDING = 'pending';
+
+    /** @var string KB document status: chunked and awaiting final index verification */
+    public const KB_STATUS_CHUNKED = 'chunked';
 
     /** @var string KB document status: successfully indexed */
     public const KB_STATUS_INDEXED = 'indexed';

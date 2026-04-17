@@ -47,22 +47,13 @@ class LinkingJob {
     }
 
     /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 1);
-    }
-
-    /**
      * Execute the linking phase.
      *
      * @param array $args Job arguments containing config.
      * @return void
      */
     public static function execute(array $args = []): void {
-        $config = $args['config'] ?? [];
+        $config = $args['config'] ?? (isset($args['batch_size']) ? $args : []);
         $job = new self();
 
         try {
@@ -291,9 +282,7 @@ class LinkingJob {
      * @return array Raw entity data.
      */
     private function get_raw_entity_data(): array {
-        // Try to get from the extraction job storage
-        // Note: This may have been cleared after deduplication
-        return get_option('vibe_ai_extracted_entities_backup', []);
+        return get_option('vibe_ai_extracted_entities', []);
     }
 
     /**
@@ -352,6 +341,8 @@ class LinkingJob {
         $this->log('info', 'Linking phase complete');
 
         $this->clear_batch_state();
+
+        delete_option('vibe_ai_extracted_entities');
 
         do_action('vibe_ai_phase_linking_complete');
     }

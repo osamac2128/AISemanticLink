@@ -5,51 +5,21 @@ declare(strict_types=1);
 namespace Vibe\AIIndex\Jobs\KB;
 
 use Vibe\AIIndex\Config;
+use Vibe\AIIndex\Pipeline\KBPipelineManager;
+use Vibe\AIIndex\Services\KB\Chunker;
+use Vibe\AIIndex\Services\KB\TokenEstimator;
+use Vibe\AIIndex\Services\KB\AnchorGenerator;
 
-/**
- * KB Phase 2: Generate chunks for documents.
- *
- * Loads documents with status='pending', splits content into semantic chunks
- * using configurable chunking strategies, and stores chunks in wp_ai_kb_chunks.
- *
- * @package Vibe\AIIndex\Jobs\KB
- * @since 1.0.0
- */
 class ChunkBuildJob {
 
-    /**
-     * Action hook for this job.
-     */
     public const HOOK = 'vibe_ai_kb_chunk_build';
 
-    /**
-     * Default batch size for document processing.
-     */
     public const BATCH_SIZE = 10;
 
-    /**
-     * Default chunk size in characters.
-     */
-    private const DEFAULT_CHUNK_SIZE = 1000;
-
-    /**
-     * Default chunk overlap in characters.
-     */
-    private const DEFAULT_CHUNK_OVERLAP = 200;
-
-    /**
-     * Option key for batch state.
-     */
     private const OPTION_BATCH_STATE = 'vibe_ai_kb_chunk_build_state';
 
-    /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 1);
-    }
+    private static ?Chunker $chunker = null;
+    private static ?TokenEstimator $tokenEstimator = null;
 
     /**
      * Schedule the chunk build job.
@@ -72,8 +42,9 @@ class ChunkBuildJob {
      * @param int $lastDocId Last processed document ID.
      * @return void
      */
-    public static function execute(int $lastDocId = 0): void {
+    public static function execute(mixed $lastDocId = 0): void {
         $job = new self();
+        $lastDocId = $job->normalizeExecutionArg($lastDocId, 'last_doc_id');
 
         try {
             $job->run($lastDocId);
@@ -98,98 +69,128 @@ class ChunkBuildJob {
 
         $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
         $chunksTable = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $manager = KBPipelineManager::get_instance();
+        $scope = $this->getScopedDocumentFilter();
 
         $this->log('info', 'Chunk build phase started', [
             'last_doc_id' => $lastDocId,
         ]);
 
-        // Get pending documents
+        $query = "SELECT d.id, d.post_id, d.title, p.post_content
+            FROM {$docsTable} d
+            INNER JOIN {$wpdb->posts} p ON d.post_id = p.ID
+            WHERE d.status = %s
+            AND d.id > %d{$scope['sql']}
+            ORDER BY d.id ASC
+            LIMIT %d";
         $docs = $wpdb->get_results($wpdb->prepare(
-            "SELECT d.id, d.post_id, d.title, p.post_content
-             FROM {$docsTable} d
-             INNER JOIN {$wpdb->posts} p ON d.post_id = p.ID
-             WHERE d.status = 'pending'
-             AND d.id > %d
-             ORDER BY d.id ASC
-             LIMIT %d",
-            $lastDocId,
-            self::BATCH_SIZE
+            $query,
+            ...array_merge([Config::KB_STATUS_PENDING, $lastDocId], $scope['args'], [self::BATCH_SIZE])
         ));
 
         if (empty($docs)) {
             $this->log('info', 'Chunk build phase complete - no more pending documents');
             $this->clearBatchState();
             do_action('vibe_ai_kb_chunk_build_complete');
-            $this->advanceToNextPhase();
             return;
         }
 
         $totalChunks = 0;
         $maxDocId = $lastDocId;
+        $chunker = $this->getChunker();
+        $processedCount = 0;
+        $failedCount = 0;
 
         foreach ($docs as $doc) {
             $docId = (int) $doc->id;
             $postId = (int) $doc->post_id;
             $maxDocId = max($maxDocId, $docId);
 
-            // Delete existing chunks for this doc (in case of re-indexing)
             $wpdb->delete($chunksTable, ['doc_id' => $docId], ['%d']);
 
-            // Generate chunks from current post content
-            $content = trim(wp_strip_all_tags((string) $doc->post_content));
+            $rawHtml = (string) $doc->post_content;
+            $content = trim(wp_strip_all_tags($rawHtml));
             if ($content === '') {
+                $wpdb->update(
+                    $docsTable,
+                    ['status' => Config::KB_STATUS_ERROR],
+                    ['id' => $docId],
+                    ['%s'],
+                    ['%d']
+                );
+                $failedCount++;
                 $this->log('warning', "No content available for doc {$docId}");
                 continue;
             }
 
-            $fullContent = trim((string) $doc->title . "\n\n" . $content);
-            $chunks = $this->generateChunks($fullContent, (string) $doc->title);
+            $headings = [];
+            if (preg_match_all('/<(h[1-6])[^>]*>(.*?)<\/\1>/i', $rawHtml, $headingMatches, PREG_SET_ORDER)) {
+                foreach ($headingMatches as $hm) {
+                    $level = (int) substr($hm[1], 1);
+                    $text = trim(wp_strip_all_tags($hm[2]));
+                    if ($text !== '') {
+                        $headings[] = ['level' => $level, 'text' => $text];
+                    }
+                }
+            }
+
+            $contentHash = hash('sha256', $content);
+            $chunks = $chunker->chunk($content, $headings, $postId, $contentHash);
 
             if (empty($chunks)) {
+                $wpdb->update(
+                    $docsTable,
+                    ['status' => Config::KB_STATUS_ERROR],
+                    ['id' => $docId],
+                    ['%s'],
+                    ['%d']
+                );
+                $failedCount++;
                 $this->log('warning', "No chunks generated for doc {$docId}");
                 continue;
             }
 
-            // Insert chunks
-            $chunkIndex = 0;
-            $offsetCursor = 0;
-            foreach ($chunks as $chunkText) {
-                $chunkLength = mb_strlen($chunkText);
-                $startOffset = $offsetCursor;
-                $endOffset = $startOffset + max(0, $chunkLength - 1);
+            if (!empty($doc->title)) {
+                $titlePrefix = '[' . $doc->title . "]\n\n";
+                $estimator = $this->getTokenEstimator();
+                $chunks = array_map(function (array $c) use ($titlePrefix, $estimator) {
+                    $c['chunk_text'] = $titlePrefix . $c['chunk_text'];
+                    $c['chunk_hash'] = hash('sha256', $c['chunk_text']);
+                    $c['token_estimate'] = $estimator->estimate($c['chunk_text']);
+                    return $c;
+                }, $chunks);
+            }
 
+            foreach ($chunks as $chunkData) {
                 $wpdb->insert(
                     $chunksTable,
                     [
                         'doc_id'            => $docId,
-                        'chunk_index'       => $chunkIndex,
-                        'anchor'            => 'chunk-' . ($chunkIndex + 1),
-                        'heading_path_json' => wp_json_encode([]),
-                        'chunk_text'        => $chunkText,
-                        'chunk_hash'        => hash('sha256', $chunkText),
-                        'start_offset'      => $startOffset,
-                        'end_offset'        => $endOffset,
-                        'token_estimate'    => $this->estimateTokenCount($chunkText),
+                        'chunk_index'       => $chunkData['chunk_index'],
+                        'anchor'            => $chunkData['anchor'],
+                        'heading_path_json' => wp_json_encode($chunkData['heading_path']),
+                        'chunk_text'        => $chunkData['chunk_text'],
+                        'chunk_hash'        => $chunkData['chunk_hash'],
+                        'start_offset'      => $chunkData['start_offset'],
+                        'end_offset'        => $chunkData['end_offset'],
+                        'token_estimate'    => $chunkData['token_estimate'],
                     ],
                     ['%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d']
                 );
-
-                $chunkIndex++;
-                $offsetCursor = max(0, $endOffset - self::DEFAULT_CHUNK_OVERLAP + 1);
             }
 
-            // Update doc chunk count and status
             $wpdb->update(
                 $docsTable,
                 [
                     'chunk_count' => count($chunks),
-                    'status'      => 'chunked',
+                    'status'      => Config::KB_STATUS_CHUNKED,
                 ],
                 ['id' => $docId],
                 ['%d', '%s'],
                 ['%d']
             );
 
+            $processedCount++;
             $totalChunks += count($chunks);
 
             $this->log('debug', "Generated chunks for doc {$docId}", [
@@ -197,11 +198,9 @@ class ChunkBuildJob {
                 'chunk_count' => count($chunks),
             ]);
 
-            // Fire action for each document chunked
-            do_action('vibe_ai_kb_chunk_build_complete', $docId, count($chunks));
+            do_action('vibe_ai_kb_document_chunked', $docId, count($chunks));
         }
 
-        // Update batch state
         $this->updateBatchState([
             'last_doc_id'   => $maxDocId,
             'total_chunks'  => ($this->getBatchState()['total_chunks'] ?? 0) + $totalChunks,
@@ -209,164 +208,88 @@ class ChunkBuildJob {
         ]);
 
         $this->log('info', "Processed batch", [
-            'docs_processed' => count($docs),
+            'docs_processed' => $processedCount,
+            'docs_failed'    => $failedCount,
             'chunks_created' => $totalChunks,
             'last_doc_id'    => $maxDocId,
         ]);
 
-        // Fire batch action
-        do_action('vibe_ai_kb_chunk_build_batch', count($docs), $totalChunks);
+        $manager->recordPhaseProgress($processedCount, $failedCount, 0);
 
-        // Schedule next batch
+        do_action('vibe_ai_kb_chunk_build_batch', $processedCount, $totalChunks);
+
         $this->scheduleNextBatch($maxDocId);
     }
 
-    /**
-     * Generate chunks from document content.
-     *
-     * Uses a sliding window approach with configurable size and overlap
-     * to create semantically meaningful chunks.
-     *
-     * @param string $content Document content.
-     * @param string $title   Document title.
-     * @return array Array of chunk strings.
-     */
-    private function generateChunks(string $content, string $title): array {
-        $chunkSize = apply_filters('vibe_ai_kb_chunk_size', self::DEFAULT_CHUNK_SIZE);
-        $chunkOverlap = apply_filters('vibe_ai_kb_chunk_overlap', self::DEFAULT_CHUNK_OVERLAP);
-
-        // Split content into paragraphs first
-        $paragraphs = preg_split('/\n\s*\n/', $content, -1, PREG_SPLIT_NO_EMPTY);
-
-        if (empty($paragraphs)) {
-            return [];
+    private function getChunker(): Chunker {
+        if (self::$chunker === null) {
+            self::$tokenEstimator = new TokenEstimator();
+            $anchorGenerator = new AnchorGenerator();
+            self::$chunker = new Chunker(self::$tokenEstimator, $anchorGenerator);
         }
+        return self::$chunker;
+    }
 
-        $chunks = [];
-        $currentChunk = '';
-        $titlePrefix = !empty($title) ? "[{$title}]\n\n" : '';
-
-        foreach ($paragraphs as $paragraph) {
-            $paragraph = trim($paragraph);
-
-            if (empty($paragraph)) {
-                continue;
-            }
-
-            // If adding this paragraph exceeds chunk size, save current chunk
-            if (!empty($currentChunk) && mb_strlen($currentChunk . "\n\n" . $paragraph) > $chunkSize) {
-                $chunks[] = $titlePrefix . trim($currentChunk);
-
-                // Start new chunk with overlap from previous
-                $overlapText = $this->getOverlapText($currentChunk, $chunkOverlap);
-                $currentChunk = $overlapText . "\n\n" . $paragraph;
-            } else {
-                // Add paragraph to current chunk
-                $currentChunk = empty($currentChunk) ? $paragraph : $currentChunk . "\n\n" . $paragraph;
-            }
-
-            // Handle very long paragraphs that exceed chunk size
-            while (mb_strlen($currentChunk) > $chunkSize * 1.5) {
-                $splitPoint = $this->findSplitPoint($currentChunk, $chunkSize);
-                $chunks[] = $titlePrefix . trim(mb_substr($currentChunk, 0, $splitPoint));
-                $currentChunk = mb_substr($currentChunk, $splitPoint - $chunkOverlap);
-            }
+    private function getTokenEstimator(): TokenEstimator {
+        if (self::$tokenEstimator === null) {
+            self::$tokenEstimator = new TokenEstimator();
         }
-
-        // Add remaining content as final chunk
-        if (!empty($currentChunk)) {
-            $chunks[] = $titlePrefix . trim($currentChunk);
-        }
-
-        // Filter and apply post-processing
-        $chunks = array_filter($chunks, function ($chunk) {
-            return mb_strlen(trim($chunk)) >= 50; // Minimum chunk length
-        });
-
-        return apply_filters('vibe_ai_kb_generated_chunks', array_values($chunks), $content, $title);
+        return self::$tokenEstimator;
     }
 
     /**
-     * Get overlap text from the end of a chunk.
+     * Normalize Action Scheduler arguments across old and new payload shapes.
      *
-     * @param string $text         Source text.
-     * @param int    $overlapSize  Desired overlap size.
-     * @return string Overlap text.
+     * @param mixed  $value Legacy or direct argument value.
+     * @param string $key   Expected associative key.
+     * @return int
      */
-    private function getOverlapText(string $text, int $overlapSize): string {
-        if (mb_strlen($text) <= $overlapSize) {
-            return $text;
+    private function normalizeExecutionArg(mixed $value, string $key): int {
+        if (is_array($value)) {
+            $value = $value[$key] ?? 0;
         }
 
-        // Try to find a sentence boundary within the overlap region
-        $endPortion = mb_substr($text, -$overlapSize * 2);
-        $sentenceEnd = mb_strrpos($endPortion, '. ');
-
-        if ($sentenceEnd !== false && $sentenceEnd > mb_strlen($endPortion) / 2) {
-            return trim(mb_substr($endPortion, $sentenceEnd + 2));
-        }
-
-        // Fall back to word boundary
-        $overlap = mb_substr($text, -$overlapSize);
-        $wordBoundary = mb_strpos($overlap, ' ');
-
-        if ($wordBoundary !== false) {
-            return trim(mb_substr($overlap, $wordBoundary));
-        }
-
-        return trim($overlap);
+        return (int) $value;
     }
 
     /**
-     * Find a good split point in text.
+     * Get the active pipeline's scope filter for document queries.
      *
-     * @param string $text      Text to split.
-     * @param int    $maxLength Maximum length.
-     * @return int Split position.
+     * @return array{sql: string, args: array<int, int|string>}
      */
-    private function findSplitPoint(string $text, int $maxLength): int {
-        // Try to split at sentence boundary
-        $searchRegion = mb_substr($text, $maxLength - 200, 400);
+    private function getScopedDocumentFilter(): array {
+        $config = KBPipelineManager::get_instance()->getConfig();
+        $scope  = (string) ($config['scope'] ?? 'all');
 
-        // Look for sentence endings
-        $sentenceEndings = ['. ', '! ', '? ', ".\n", "!\n", "?\n"];
-        $bestSplit = $maxLength;
+        if ($scope === 'post_id' && !empty($config['post_id'])) {
+            return [
+                'sql'  => ' AND d.post_id = %d',
+                'args' => [(int) $config['post_id']],
+            ];
+        }
 
-        foreach ($sentenceEndings as $ending) {
-            $pos = mb_strpos($searchRegion, $ending);
-            if ($pos !== false) {
-                $actualPos = $maxLength - 200 + $pos + mb_strlen($ending);
-                if ($actualPos <= $maxLength + 100) {
-                    $bestSplit = $actualPos;
-                    break;
-                }
+        if ($scope === 'post_type' && !empty($config['post_type'])) {
+            return [
+                'sql'  => ' AND d.post_type = %s',
+                'args' => [sanitize_text_field((string) $config['post_type'])],
+            ];
+        }
+
+        $postTypes = $config['post_types'] ?? [];
+        if (is_array($postTypes) && !empty($postTypes)) {
+            $sanitized = array_values(array_filter(array_map('sanitize_text_field', $postTypes)));
+            if (!empty($sanitized)) {
+                return [
+                    'sql'  => ' AND d.post_type IN (' . implode(', ', array_fill(0, count($sanitized), '%s')) . ')',
+                    'args' => $sanitized,
+                ];
             }
         }
 
-        // Fall back to word boundary
-        if ($bestSplit >= $maxLength + 100) {
-            $portion = mb_substr($text, 0, $maxLength);
-            $lastSpace = mb_strrpos($portion, ' ');
-            if ($lastSpace !== false && $lastSpace > $maxLength * 0.7) {
-                $bestSplit = $lastSpace + 1;
-            }
-        }
-
-        return $bestSplit;
-    }
-
-    /**
-     * Estimate token count for a chunk.
-     *
-     * Uses a simple approximation of ~4 characters per token.
-     *
-     * @param string $text Text to estimate.
-     * @return int Estimated token count.
-     */
-    private function estimateTokenCount(string $text): int {
-        // Rough estimation: ~4 characters per token for English
-        // This is a common approximation used by OpenAI
-        return (int) ceil(mb_strlen($text) / 4);
+        return [
+            'sql'  => '',
+            'args' => [],
+        ];
     }
 
     /**
@@ -418,16 +341,6 @@ class ChunkBuildJob {
         );
 
         $this->log('debug', 'Next chunk build batch scheduled');
-    }
-
-    /**
-     * Advance to the next phase (EmbedChunksJob).
-     *
-     * @return void
-     */
-    private function advanceToNextPhase(): void {
-        EmbedChunksJob::schedule(0);
-        $this->log('info', 'Advancing to embed chunks phase');
     }
 
     /**

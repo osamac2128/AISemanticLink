@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Repositories\KB;
 
+use Vibe\AIIndex\Config;
 use Vibe\AIIndex\Services\KB\VectorStore\VectorStoreInterface;
 use Vibe\AIIndex\Services\KB\VectorStore\MySQLVectorStore;
 
@@ -62,9 +63,9 @@ class VectorRepository {
     public function __construct(?VectorStoreInterface $store = null) {
         global $wpdb;
         $this->wpdb         = $wpdb;
-        $this->table        = $wpdb->prefix . 'ai_kb_vectors';
-        $this->chunks_table = $wpdb->prefix . 'ai_kb_chunks';
-        $this->docs_table   = $wpdb->prefix . 'ai_kb_docs';
+        $this->table        = $wpdb->prefix . Config::TABLE_KB_VECTORS;
+        $this->chunks_table = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $this->docs_table   = $wpdb->prefix . Config::TABLE_KB_DOCS;
         $this->store        = $store ?? new MySQLVectorStore();
     }
 

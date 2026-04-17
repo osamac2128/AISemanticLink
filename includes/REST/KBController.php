@@ -916,6 +916,7 @@ class KBController
                 'total_docs'    => (int) $docStats['total_docs'],
                 'indexed_docs'  => (int) $docStats['indexed_docs'],
                 'pending_docs'  => (int) $docStats['pending_docs'],
+                'chunked_docs'  => (int) ($docStats['chunked_docs'] ?? 0),
                 'excluded_docs' => (int) $docStats['excluded_docs'],
                 'failed_docs'   => (int) $docStats['failed_docs'],
                 'total_chunks'  => (int) $chunkRepo->count(),
@@ -1451,13 +1452,26 @@ class KBController
      */
     public function get_settings(WP_REST_Request $request): WP_REST_Response
     {
+        $postTypesObjects = get_post_types(['public' => true], 'objects');
+        $availablePostTypes = array_values(array_map(
+            static function ($postType) {
+                return [
+                    'name'        => $postType->name,
+                    'label'       => $postType->labels->singular_name ?? $postType->label ?? $postType->name,
+                    'description' => $postType->description ?? '',
+                ];
+            },
+            $postTypesObjects
+        ));
+
         $settings = [
             'kb_enabled'      => $this->is_kb_enabled(),
             'embedding_model' => get_option('vibe_ai_kb_embedding_model', 'text-embedding-3-small'),
-            'chunk_size'      => (int) get_option('vibe_ai_kb_chunk_size', 500),
-            'chunk_overlap'   => (int) get_option('vibe_ai_kb_chunk_overlap', 50),
+            'chunk_size'      => (int) get_option('vibe_ai_kb_chunk_size', Config::KB_CHUNK_TOKENS_TARGET),
+            'chunk_overlap'   => (int) get_option('vibe_ai_kb_chunk_overlap', Config::KB_CHUNK_OVERLAP_TOKENS),
             'post_types'      => get_option('vibe_ai_kb_post_types', Config::DEFAULT_POST_TYPES),
             'auto_index'      => (bool) get_option('vibe_ai_kb_auto_index', true),
+            'available_post_types' => $availablePostTypes,
         ];
 
         return rest_ensure_response($settings);

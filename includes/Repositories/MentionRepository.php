@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Repositories;
 
+use Vibe\AIIndex\Config;
+
 /**
  * MentionRepository: Handle mention-specific operations.
  *
@@ -42,8 +44,8 @@ class MentionRepository {
     public function __construct() {
         global $wpdb;
         $this->wpdb           = $wpdb;
-        $this->mentions_table = $wpdb->prefix . 'ai_mentions';
-        $this->entities_table = $wpdb->prefix . 'ai_entities';
+        $this->mentions_table = $wpdb->prefix . Config::TABLE_MENTIONS;
+        $this->entities_table = $wpdb->prefix . Config::TABLE_ENTITIES;
     }
 
     /**
@@ -364,17 +366,8 @@ class MentionRepository {
      * @return void
      */
     private function update_entity_mention_count( int $entity_id ): void {
-        $this->wpdb->query(
-            $this->wpdb->prepare(
-                "UPDATE {$this->entities_table}
-                 SET mention_count = (
-                     SELECT COUNT(*) FROM {$this->mentions_table} WHERE entity_id = %d
-                 )
-                 WHERE id = %d",
-                $entity_id,
-                $entity_id
-            )
-        );
+        $entityRepo = new EntityRepository();
+        $entityRepo->update_mention_count( $entity_id );
     }
 
     /**

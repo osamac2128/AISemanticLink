@@ -94,10 +94,12 @@ class AdminRenderer
             ? require $asset_file
             : ['dependencies' => [], 'version' => $this->version];
 
+        $dependencies = array_unique(array_merge($asset['dependencies'], ['wp-element', 'wp-api-fetch']));
+
         wp_enqueue_script(
             'vibe-ai-admin',
             VIBE_AI_PLUGIN_URL . 'admin/js/build/index.jsx.js',
-            $asset['dependencies'],
+            $dependencies,
             $asset['version'],
             true
         );

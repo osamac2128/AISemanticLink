@@ -51,9 +51,9 @@ class DocumentRepository {
     public function __construct() {
         global $wpdb;
         $this->wpdb          = $wpdb;
-        $this->table         = $wpdb->prefix . 'ai_kb_docs';
-        $this->chunks_table  = $wpdb->prefix . 'ai_kb_chunks';
-        $this->vectors_table = $wpdb->prefix . 'ai_kb_vectors';
+        $this->table         = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $this->chunks_table  = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
+        $this->vectors_table = $wpdb->prefix . Config::TABLE_KB_VECTORS;
     }
 
     /**
@@ -178,12 +178,18 @@ class DocumentRepository {
      * Update document status.
      *
      * @param int    $id     The document ID.
-     * @param string $status The new status (pending, indexed, error, excluded).
+     * @param string $status The new status (pending, chunked, indexed, error, excluded).
      *
      * @return void
      */
     public function setStatus(int $id, string $status): void {
-        $allowed_statuses = ['pending', 'indexed', 'error', 'excluded'];
+        $allowed_statuses = [
+            Config::KB_STATUS_PENDING,
+            Config::KB_STATUS_CHUNKED,
+            Config::KB_STATUS_INDEXED,
+            Config::KB_STATUS_ERROR,
+            Config::KB_STATUS_EXCLUDED,
+        ];
         $status = sanitize_text_field($status);
 
         if (!in_array($status, $allowed_statuses, true)) {
@@ -371,9 +377,9 @@ class DocumentRepository {
      */
     public function delete(int $id): void {
         $this->wpdb->query('START TRANSACTION');
+        $success = false;
 
         try {
-            // Get chunk IDs for this document.
             $chunk_ids = $this->wpdb->get_col(
                 $this->wpdb->prepare(
                     "SELECT id FROM {$this->chunks_table} WHERE doc_id = %d",
@@ -381,7 +387,6 @@ class DocumentRepository {
                 )
             );
 
-            // Delete vectors for all chunks.
             if (!empty($chunk_ids)) {
                 $placeholders = implode(', ', array_fill(0, count($chunk_ids), '%d'));
                 $this->wpdb->query(
@@ -390,26 +395,41 @@ class DocumentRepository {
                         ...$chunk_ids
                     )
                 );
+
+                if ($this->wpdb->last_error) {
+                    $this->wpdb->query('ROLLBACK');
+                    throw new \RuntimeException($this->wpdb->last_error);
+                }
             }
 
-            // Delete chunks.
             $this->wpdb->delete(
                 $this->chunks_table,
                 ['doc_id' => $id],
                 ['%d']
             );
 
-            // Delete document.
+            if ($this->wpdb->last_error) {
+                $this->wpdb->query('ROLLBACK');
+                throw new \RuntimeException($this->wpdb->last_error);
+            }
+
             $this->wpdb->delete(
                 $this->table,
                 ['id' => $id],
                 ['%d']
             );
 
+            if ($this->wpdb->last_error) {
+                $this->wpdb->query('ROLLBACK');
+                throw new \RuntimeException($this->wpdb->last_error);
+            }
+
             $this->wpdb->query('COMMIT');
-        } catch (\Exception $e) {
-            $this->wpdb->query('ROLLBACK');
-            throw $e;
+            $success = true;
+        } finally {
+            if (!$success) {
+                @$this->wpdb->query('ROLLBACK');
+            }
         }
     }
 
@@ -455,7 +475,7 @@ class DocumentRepository {
     /**
      * Get statistics.
      *
-     * @return array{total: int, indexed: int, pending: int, error: int, excluded: int}
+     * @return array{total: int, indexed: int, pending: int, chunked: int, error: int, excluded: int}
      */
     public function getStats(): array {
         $results = $this->wpdb->get_results(
@@ -468,6 +488,7 @@ class DocumentRepository {
             'total'    => 0,
             'indexed'  => 0,
             'pending'  => 0,
+            'chunked'  => 0,
             'error'    => 0,
             'excluded' => 0,
         ];
@@ -679,6 +700,7 @@ class DocumentRepository {
             'total_docs'    => (int) ($stats['total'] ?? 0),
             'indexed_docs'  => (int) ($stats['indexed'] ?? 0),
             'pending_docs'  => (int) ($stats['pending'] ?? 0),
+            'chunked_docs'  => (int) ($stats['chunked'] ?? 0),
             'excluded_docs' => (int) ($stats['excluded'] ?? 0),
             'failed_docs'   => (int) ($stats['error'] ?? 0),
         ];
@@ -704,10 +726,12 @@ class DocumentRepository {
      * @return bool
      */
     public function exclude_document(int $postId): bool {
+        update_post_meta($postId, Config::KB_META_EXCLUDED, '1');
+
         $document = $this->findByPostId($postId);
 
         if ($document !== null) {
-            $this->setStatus((int) $document->id, 'excluded');
+            $this->setStatus((int) $document->id, Config::KB_STATUS_EXCLUDED);
             return true;
         }
 
@@ -722,7 +746,7 @@ class DocumentRepository {
             'content_hash' => '',
             'title'        => (string) $post->post_title,
             'url'          => (string) get_permalink($postId),
-            'status'       => 'excluded',
+            'status'       => Config::KB_STATUS_EXCLUDED,
             'chunk_count'  => 0,
         ]);
 
@@ -736,10 +760,12 @@ class DocumentRepository {
      * @return bool
      */
     public function include_document(int $postId): bool {
+        delete_post_meta($postId, Config::KB_META_EXCLUDED);
+
         $document = $this->findByPostId($postId);
 
         if ($document !== null) {
-            $this->setStatus((int) $document->id, 'pending');
+            $this->setStatus((int) $document->id, Config::KB_STATUS_PENDING);
             return true;
         }
 
@@ -754,7 +780,7 @@ class DocumentRepository {
             'content_hash' => '',
             'title'        => (string) $post->post_title,
             'url'          => (string) get_permalink($postId),
-            'status'       => 'pending',
+            'status'       => Config::KB_STATUS_PENDING,
             'chunk_count'  => 0,
         ]);
 

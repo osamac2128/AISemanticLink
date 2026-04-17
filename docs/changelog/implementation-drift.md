@@ -31,6 +31,8 @@ Resolution details:
 - `docs/api/entities.md` now lists `PUT/PATCH` for entity updates and `POST/PUT/PATCH` for settings with WordPress compatibility notes.
 - `docs/api/knowledge-base.md` now lists `POST/PUT/PATCH` for pinned-pages updates and recommends `PUT/PATCH` for idempotent updates.
 
-## Active drift
+### Admin UI global variable naming inconsistency (resolved 2026-04-10)
 
-- None currently tracked.
+- All component references standardized on `window.vibeAiData` (matching `AdminRenderer.php`)
+- Inline API functions in 6 components replaced with centralized `api/client.js` imports
+- Affected files: `EntityManager/index.jsx`, `EntityDrawer/index.jsx`, `Settings/index.jsx`, `ActivityLog/index.jsx`, `EntityDrawer/MentionsSection.jsx`, `EntityManager/MergeModal.jsx`

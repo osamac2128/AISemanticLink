@@ -45,7 +45,7 @@ class SchemaBuildJob {
     /**
      * Current schema version.
      */
-    private const SCHEMA_VERSION = 1;
+    private const SCHEMA_VERSION = 2;
 
     /**
      * Minimum confidence threshold for including entities in schema.
@@ -83,22 +83,13 @@ class SchemaBuildJob {
     }
 
     /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 1);
-    }
-
-    /**
      * Execute the schema build phase.
      *
      * @param array $args Job arguments containing config.
      * @return void
      */
     public static function execute(array $args = []): void {
-        $config = $args['config'] ?? [];
+        $config = $args['config'] ?? (isset($args['batch_size']) ? $args : []);
         $job = new self();
 
         try {

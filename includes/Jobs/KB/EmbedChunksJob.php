@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vibe\AIIndex\Jobs\KB;
 
 use Vibe\AIIndex\Config;
+use Vibe\AIIndex\Pipeline\KBPipelineManager;
 use Vibe\AIIndex\Services\Exceptions\RateLimitException;
 
 /**
@@ -17,7 +18,8 @@ use Vibe\AIIndex\Services\Exceptions\RateLimitException;
  * @package Vibe\AIIndex\Jobs\KB
  * @since 1.0.0
  */
-class EmbedChunksJob {
+class EmbedChunksJob
+{
 
     /**
      * Action hook for this job.
@@ -60,21 +62,13 @@ class EmbedChunksJob {
     private const BASE_BACKOFF_DELAY = 5;
 
     /**
-     * Register the job with Action Scheduler.
-     *
-     * @return void
-     */
-    public static function register(): void {
-        add_action(self::HOOK, [self::class, 'execute'], 10, 1);
-    }
-
-    /**
      * Schedule the embed chunks job.
      *
      * @param int $lastChunkId Last processed chunk ID.
      * @return void
      */
-    public static function schedule(int $lastChunkId = 0): void {
+    public static function schedule(int $lastChunkId = 0): void
+    {
         as_schedule_single_action(
             time(),
             self::HOOK,
@@ -89,8 +83,10 @@ class EmbedChunksJob {
      * @param int $lastChunkId Last processed chunk ID.
      * @return void
      */
-    public static function execute(int $lastChunkId = 0): void {
+    public static function execute(mixed $lastChunkId = 0): void
+    {
         $job = new self();
+        $lastChunkId = $job->normalizeExecutionArg($lastChunkId, 'last_chunk_id');
 
         try {
             $job->run($lastChunkId);
@@ -107,7 +103,8 @@ class EmbedChunksJob {
      * @param int $lastChunkId Last processed chunk ID.
      * @return void
      */
-    public function run(int $lastChunkId): void {
+    public function run(int $lastChunkId): void
+    {
         global $wpdb;
 
         if (get_option('vibe_ai_kb_pipeline_status', 'idle') !== 'running' || (bool) get_option('vibe_ai_kb_pipeline_stop_requested', 0)) {
@@ -117,6 +114,8 @@ class EmbedChunksJob {
 
         $chunksTable = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
         $vectorsTable = $wpdb->prefix . Config::TABLE_KB_VECTORS;
+        $docsTable = $wpdb->prefix . Config::TABLE_KB_DOCS;
+        $scope = $this->getScopedDocumentFilter();
 
         $this->log('info', 'Embed chunks phase started', [
             'last_chunk_id' => $lastChunkId,
@@ -126,23 +125,23 @@ class EmbedChunksJob {
         $batchSize = $this->getBatchSize();
 
         // Get chunks without vectors
+        $query = "SELECT c.id, c.doc_id, c.chunk_text
+            FROM {$chunksTable} c
+            INNER JOIN {$docsTable} d ON c.doc_id = d.id
+            LEFT JOIN {$vectorsTable} v ON c.id = v.chunk_id
+            WHERE v.id IS NULL
+            AND c.id > %d{$scope['sql']}
+            ORDER BY c.id ASC
+            LIMIT %d";
         $chunks = $wpdb->get_results($wpdb->prepare(
-            "SELECT c.id, c.doc_id, c.chunk_text
-             FROM {$chunksTable} c
-             LEFT JOIN {$vectorsTable} v ON c.id = v.chunk_id
-             WHERE v.id IS NULL
-             AND c.id > %d
-             ORDER BY c.id ASC
-             LIMIT %d",
-            $lastChunkId,
-            $batchSize
+            $query,
+            ...array_merge([$lastChunkId], $scope['args'], [$batchSize])
         ));
 
         if (empty($chunks)) {
             $this->log('info', 'Embed chunks phase complete - no more chunks without vectors');
             $this->clearBatchState();
             do_action('vibe_ai_kb_embed_chunks_complete');
-            $this->advanceToNextPhase();
             return;
         }
 
@@ -181,47 +180,63 @@ class EmbedChunksJob {
         $dims = (int) ($embeddingResult['dims'] ?? 0);
 
         // Store vectors
+        // Store vectors in bulk to optimize speed, but chunked to avoid max_allowed_packet errors
         $storedCount = 0;
-        foreach ($chunks as $index => $chunk) {
-            $embedding = $embeddings[$index];
-            if (!is_array($embedding) || empty($embedding)) {
-                continue;
+
+        // Chunk size of 20 ensures we stay well below 1MB payload limits (each vector is ~6KB)
+        $chunkSize = 20;
+
+        for ($i = 0; $i < count($chunks); $i += $chunkSize) {
+            $batchChunks = array_slice($chunks, $i, $chunkSize);
+
+            $placeholders = [];
+            $values = [];
+
+            foreach ($batchChunks as $offset => $chunk) {
+                $index = $i + $offset;
+                $embedding = $embeddings[$index];
+
+                if (!is_array($embedding) || empty($embedding)) {
+                    continue;
+                }
+
+                if ($dims <= 0) {
+                    $dims = count($embedding);
+                }
+
+                $vectorPayload = pack('f*', ...$embedding);
+
+                $placeholders[] = '(%d, %s, %s, %d, %s)';
+                $values[] = $chunk->id;
+                $values[] = $provider;
+                $values[] = $model;
+                $values[] = $dims;
+                $values[] = $vectorPayload;
+
+                $storedCount++;
             }
 
-            if ($dims <= 0) {
-                $dims = count($embedding);
+            if (!empty($values)) {
+                $query = "INSERT INTO {$vectorsTable} (chunk_id, provider, model, dims, vector_payload) VALUES " . implode(', ', $placeholders);
+                $wpdb->query($wpdb->prepare($query, ...$values));
             }
-
-            $vectorPayload = pack('f*', ...$embedding);
-
-            $wpdb->insert(
-                $vectorsTable,
-                [
-                    'chunk_id'        => $chunk->id,
-                    'provider'        => $provider,
-                    'model'           => $model,
-                    'dims'            => $dims,
-                    'vector_payload'  => $vectorPayload,
-                ],
-                ['%d', '%s', '%s', '%d', '%s']
-            );
-
-            $storedCount++;
         }
 
         // Update batch state
         $state = $this->getBatchState();
         $this->updateBatchState([
-            'last_chunk_id'  => $maxChunkId,
+            'last_chunk_id' => $maxChunkId,
             'embedded_count' => ($state['embedded_count'] ?? 0) + $storedCount,
-            'retry_count'    => 0, // Reset retry count on success
+            'retry_count' => 0, // Reset retry count on success
         ]);
 
         $this->log('info', "Embedded {$storedCount} chunks", [
             'last_chunk_id' => $maxChunkId,
-            'model'         => $model,
-            'dims'          => $dims,
+            'model' => $model,
+            'dims' => $dims,
         ]);
+
+        KBPipelineManager::get_instance()->recordPhaseProgress($storedCount, 0, 0);
 
         // Fire logging action
         do_action('vibe_ai_job_log', 'kb_embed', 'info', "Embedded {$storedCount} chunks");
@@ -240,7 +255,8 @@ class EmbedChunksJob {
      * @return array Array of embedding vectors.
      * @throws RateLimitException When rate limit is exceeded.
      */
-    private function generateEmbeddings(array $texts): array {
+    private function generateEmbeddings(array $texts): array
+    {
         if (class_exists('\Vibe\AIIndex\Services\KB\EmbeddingClient')) {
             $client = new \Vibe\AIIndex\Services\KB\EmbeddingClient();
             $result = $client->embed($texts, $this->getEmbeddingModel());
@@ -248,26 +264,26 @@ class EmbedChunksJob {
             if (isset($result['embeddings']) && is_array($result['embeddings'])) {
                 return [
                     'embeddings' => array_values($result['embeddings']),
-                    'model'      => (string) ($result['model'] ?? $this->getEmbeddingModel()),
-                    'dims'       => (int) ($result['dims'] ?? 0),
-                    'provider'   => 'openrouter',
+                    'model' => (string) ($result['model'] ?? $this->getEmbeddingModel()),
+                    'dims' => (int) ($result['dims'] ?? 0),
+                    'provider' => 'openrouter',
                 ];
             }
 
             if (is_array($result) && !empty($result) && is_array($result[0] ?? null)) {
                 return [
                     'embeddings' => array_values($result),
-                    'model'      => $this->getEmbeddingModel(),
-                    'dims'       => 0,
-                    'provider'   => 'openrouter',
+                    'model' => $this->getEmbeddingModel(),
+                    'dims' => 0,
+                    'provider' => 'openrouter',
                 ];
             }
 
             return [
                 'embeddings' => [],
-                'model'      => $this->getEmbeddingModel(),
-                'dims'       => 0,
-                'provider'   => 'openrouter',
+                'model' => $this->getEmbeddingModel(),
+                'dims' => 0,
+                'provider' => 'openrouter',
             ];
         }
 
@@ -281,7 +297,8 @@ class EmbedChunksJob {
      * @return array Embedding vectors.
      * @throws RateLimitException When rate limit is exceeded.
      */
-    private function callEmbeddingAPI(array $texts): array {
+    private function callEmbeddingAPI(array $texts): array
+    {
         $apiKey = get_option('vibe_ai_openai_api_key', '');
 
         if (empty($apiKey)) {
@@ -295,7 +312,7 @@ class EmbedChunksJob {
             'timeout' => 60,
             'headers' => [
                 'Authorization' => 'Bearer ' . $apiKey,
-                'Content-Type'  => 'application/json',
+                'Content-Type' => 'application/json',
             ],
             'body' => wp_json_encode([
                 'model' => $model,
@@ -348,9 +365,9 @@ class EmbedChunksJob {
 
         return [
             'embeddings' => $ordered,
-            'model'      => (string) ($body['model'] ?? $model),
-            'dims'       => !empty($ordered[0]) ? count($ordered[0]) : 0,
-            'provider'   => 'openai',
+            'model' => (string) ($body['model'] ?? $model),
+            'dims' => !empty($ordered[0]) ? count($ordered[0]) : 0,
+            'provider' => 'openai',
         ];
     }
 
@@ -359,7 +376,8 @@ class EmbedChunksJob {
      *
      * @return string Model name.
      */
-    private function getEmbeddingModel(): string {
+    private function getEmbeddingModel(): string
+    {
         return get_option('vibe_ai_kb_embedding_model', self::DEFAULT_EMBEDDING_MODEL);
     }
 
@@ -368,7 +386,8 @@ class EmbedChunksJob {
      *
      * @return string Provider identifier.
      */
-    private function getEmbeddingProvider(): string {
+    private function getEmbeddingProvider(): string
+    {
         return (string) get_option('vibe_ai_kb_embedding_provider', 'openrouter');
     }
 
@@ -377,7 +396,8 @@ class EmbedChunksJob {
      *
      * @return int Dimensions.
      */
-    private function getEmbeddingDimensions(): int {
+    private function getEmbeddingDimensions(): int
+    {
         return (int) get_option('vibe_ai_kb_embedding_dims', self::DEFAULT_EMBEDDING_DIMS);
     }
 
@@ -386,9 +406,67 @@ class EmbedChunksJob {
      *
      * @return int Batch size.
      */
-    private function getBatchSize(): int {
+    private function getBatchSize(): int
+    {
         $batchSize = (int) get_option('vibe_ai_kb_embed_batch_size', self::DEFAULT_BATCH_SIZE);
         return min($batchSize, self::MAX_BATCH_SIZE);
+    }
+
+    /**
+     * Normalize Action Scheduler arguments across old and new payload shapes.
+     *
+     * @param mixed  $value Legacy or direct argument value.
+     * @param string $key   Expected associative key.
+     * @return int
+     */
+    private function normalizeExecutionArg(mixed $value, string $key): int
+    {
+        if (is_array($value)) {
+            $value = $value[$key] ?? 0;
+        }
+
+        return (int) $value;
+    }
+
+    /**
+     * Get the active pipeline's scope filter for document queries.
+     *
+     * @return array{sql: string, args: array<int, int|string>}
+     */
+    private function getScopedDocumentFilter(): array
+    {
+        $config = KBPipelineManager::get_instance()->getConfig();
+        $scope  = (string) ($config['scope'] ?? 'all');
+
+        if ($scope === 'post_id' && !empty($config['post_id'])) {
+            return [
+                'sql'  => ' AND d.post_id = %d',
+                'args' => [(int) $config['post_id']],
+            ];
+        }
+
+        if ($scope === 'post_type' && !empty($config['post_type'])) {
+            return [
+                'sql'  => ' AND d.post_type = %s',
+                'args' => [sanitize_text_field((string) $config['post_type'])],
+            ];
+        }
+
+        $postTypes = $config['post_types'] ?? [];
+        if (is_array($postTypes) && !empty($postTypes)) {
+            $sanitized = array_values(array_filter(array_map('sanitize_text_field', $postTypes)));
+            if (!empty($sanitized)) {
+                return [
+                    'sql'  => ' AND d.post_type IN (' . implode(', ', array_fill(0, count($sanitized), '%s')) . ')',
+                    'args' => $sanitized,
+                ];
+            }
+        }
+
+        return [
+            'sql'  => '',
+            'args' => [],
+        ];
     }
 
     /**
@@ -397,7 +475,8 @@ class EmbedChunksJob {
      * @param RateLimitException $e Exception.
      * @return void
      */
-    private function handleRateLimit(RateLimitException $e): void {
+    private function handleRateLimit(RateLimitException $e): void
+    {
         $state = $this->getBatchState();
         $retryCount = ($state['retry_count'] ?? 0) + 1;
 
@@ -416,9 +495,9 @@ class EmbedChunksJob {
         $this->updateBatchState(['retry_count' => $retryCount]);
 
         $this->log('warning', "Rate limit hit, backing off", [
-            'retry_count'  => $retryCount,
-            'delay'        => $delay,
-            'limit_type'   => $e->getLimitType(),
+            'retry_count' => $retryCount,
+            'delay' => $delay,
+            'limit_type' => $e->getLimitType(),
         ]);
 
         // Schedule retry with delay
@@ -431,11 +510,12 @@ class EmbedChunksJob {
      *
      * @return array Batch state.
      */
-    private function getBatchState(): array {
+    private function getBatchState(): array
+    {
         return get_option(self::OPTION_BATCH_STATE, [
-            'last_chunk_id'  => 0,
+            'last_chunk_id' => 0,
             'embedded_count' => 0,
-            'retry_count'    => 0,
+            'retry_count' => 0,
         ]);
     }
 
@@ -445,7 +525,8 @@ class EmbedChunksJob {
      * @param array $state New state values.
      * @return void
      */
-    private function updateBatchState(array $state): void {
+    private function updateBatchState(array $state): void
+    {
         $current = $this->getBatchState();
         $updated = wp_parse_args($state, $current);
         update_option(self::OPTION_BATCH_STATE, $updated, false);
@@ -456,7 +537,8 @@ class EmbedChunksJob {
      *
      * @return void
      */
-    private function clearBatchState(): void {
+    private function clearBatchState(): void
+    {
         delete_option(self::OPTION_BATCH_STATE);
     }
 
@@ -467,7 +549,8 @@ class EmbedChunksJob {
      * @param int $delay       Optional delay in seconds.
      * @return void
      */
-    private function scheduleNextBatch(int $lastChunkId, int $delay = 1): void {
+    private function scheduleNextBatch(int $lastChunkId, int $delay = 1): void
+    {
         as_schedule_single_action(
             time() + $delay,
             self::HOOK,
@@ -481,27 +564,18 @@ class EmbedChunksJob {
     }
 
     /**
-     * Advance to the next phase (IndexUpsertJob).
-     *
-     * @return void
-     */
-    private function advanceToNextPhase(): void {
-        IndexUpsertJob::schedule(0);
-        $this->log('info', 'Advancing to index upsert phase');
-    }
-
-    /**
      * Handle job execution error.
      *
      * @param \Throwable $e Exception.
      * @return void
      */
-    private function handleError(\Throwable $e): void {
+    private function handleError(\Throwable $e): void
+    {
         $this->log('error', 'Embed chunks phase failed: ' . $e->getMessage(), [
             'exception' => get_class($e),
-            'file'      => $e->getFile(),
-            'line'      => $e->getLine(),
-            'trace'     => $e->getTraceAsString(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString(),
         ]);
 
         do_action('vibe_ai_kb_job_failed', 'embed_chunks', $e->getMessage());
@@ -515,7 +589,8 @@ class EmbedChunksJob {
      * @param array  $context Additional context.
      * @return void
      */
-    private function log(string $level, string $message, array $context = []): void {
+    private function log(string $level, string $message, array $context = []): void
+    {
         if (function_exists('vibe_ai_log')) {
             vibe_ai_log($level, '[KB/EmbedChunks] ' . $message, $context);
         }
