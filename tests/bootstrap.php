@@ -272,4 +272,56 @@ if (!function_exists('vibe_ai_log')) {
     }
 }
 
+if (!function_exists('get_current_user_id')) {
+    function get_current_user_id() {
+        return 1;
+    }
+}
+
+if (!function_exists('absint')) {
+    function absint($maybeint) {
+        return abs((int) $maybeint);
+    }
+}
+
+if (!function_exists('strip_shortcodes')) {
+    function strip_shortcodes($content) {
+        return $content;
+    }
+}
+
+if (!function_exists('wp_kses_post')) {
+    function wp_kses_post($data) {
+        return $data;
+    }
+}
+
+if (!function_exists('has_filter')) {
+    function has_filter($tag, $callback = false) {
+        return false;
+    }
+}
+
+if (!function_exists('wp_is_post_autosave')) {
+    function wp_is_post_autosave($post) {
+        return false;
+    }
+}
+
+if (!function_exists('wp_is_post_revision')) {
+    function wp_is_post_revision($post) {
+        return false;
+    }
+}
+
+if (!function_exists('as_unschedule_all_actions')) {
+    function as_unschedule_all_actions($hook, $args = []) {}
+}
+
+if (!function_exists('as_next_scheduled_action')) {
+    function as_next_scheduled_action($hook, $args = []) {
+        return false;
+    }
+}
+
 $GLOBALS['wpdb'] = null;
