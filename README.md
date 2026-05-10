@@ -22,7 +22,7 @@ The plugin has two major subsystems:
 ### Entity Extraction
 
 - **6-phase extraction pipeline** — content is fetched, sent to AI, parsed, deduplicated, linked to posts, and injected as JSON-LD
-- **10 entity types** — Person, Organization, Location, Event, Product, CreativeWork, Concept, Technology, Law, MedicalCondition — each mapped to Schema.org
+- **10 entity types** — Person, Org, Company, Location, Country, Product, Software, Event, Work, Concept — each mapped to Schema.org
 - **Schema.org JSON-LD injection** — automatically added to page `<head>` for linked entities
 - **Alias resolution and deduplication** — "OpenAI", "OpenAI Inc.", and "OpenAI, Inc." resolve to a single entity
 - **Chain-link cache invalidation** — editing an entity propagates changes to every post that mentions it
