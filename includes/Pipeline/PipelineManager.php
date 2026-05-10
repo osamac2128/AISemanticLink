@@ -10,6 +10,7 @@ use Vibe\AIIndex\Jobs\DeduplicationJob;
 use Vibe\AIIndex\Jobs\LinkingJob;
 use Vibe\AIIndex\Jobs\IndexingJob;
 use Vibe\AIIndex\Jobs\SchemaBuildJob;
+use Vibe\AIIndex\Services\ModelRouter;
 
 /**
  * PipelineManager: Orchestrates the 6-phase AI Entity extraction pipeline.
@@ -449,6 +450,9 @@ class PipelineManager
 
         $hook = "vibe_ai_phase_{$phase}";
         $config = $this->get_config();
+
+        // Inject the routed model for this phase
+        $config['model'] = ModelRouter::select($phase);
 
         // Schedule using Action Scheduler
         as_schedule_single_action(

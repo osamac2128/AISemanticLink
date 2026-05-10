@@ -17,6 +17,7 @@ use Vibe\AIIndex\Config;
 use Vibe\AIIndex\Logger;
 use Vibe\AIIndex\Repositories\EntityRepository;
 use Vibe\AIIndex\Pipeline\PipelineManager;
+use Vibe\AIIndex\Services\AuditLogger;
 use Vibe\AIIndex\Services\SemanticHealthService;
 use WP_REST_Request;
 use WP_REST_Response;
@@ -109,6 +110,46 @@ class RestController
                 'callback' => [$this, 'get_entities'],
                 'permission_callback' => [$this, 'check_admin_permission'],
                 'args' => $this->get_entities_collection_params(),
+            ],
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'create_entity'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+                'args' => [
+                    'name' => [
+                        'description' => __('The entity name.', 'ai-entity-index'),
+                        'type' => 'string',
+                        'required' => true,
+                        'sanitize_callback' => 'sanitize_text_field',
+                        'validate_callback' => [$this, 'validate_non_empty_string'],
+                    ],
+                    'type' => [
+                        'description' => __('The entity type.', 'ai-entity-index'),
+                        'type' => 'string',
+                        'required' => true,
+                        'enum' => Config::VALID_TYPES,
+                        'sanitize_callback' => 'sanitize_text_field',
+                    ],
+                    'status' => [
+                        'description' => __('The entity status.', 'ai-entity-index'),
+                        'type' => 'string',
+                        'default' => 'raw',
+                        'enum' => Config::VALID_STATUSES,
+                        'sanitize_callback' => 'sanitize_text_field',
+                    ],
+                    'description' => [
+                        'description' => __('A brief description of the entity.', 'ai-entity-index'),
+                        'type' => 'string',
+                        'default' => '',
+                        'sanitize_callback' => 'sanitize_textarea_field',
+                    ],
+                    'aliases' => [
+                        'description' => __('Array of alias names for the entity.', 'ai-entity-index'),
+                        'type' => 'array',
+                        'default' => [],
+                        'sanitize_callback' => [$this, 'sanitize_string_array'],
+                    ],
+                ],
             ],
         ]);
 
@@ -433,6 +474,21 @@ class RestController
                         'sanitize_callback' => 'sanitize_text_field',
                         'validate_callback' => [$this, 'validate_date_format'],
                     ],
+                    'page' => [
+                        'description' => __('Page number for pagination.', 'ai-entity-index'),
+                        'type' => 'integer',
+                        'default' => 1,
+                        'minimum' => 1,
+                        'sanitize_callback' => 'absint',
+                    ],
+                    'per_page' => [
+                        'description' => __('Number of log entries per page.', 'ai-entity-index'),
+                        'type' => 'integer',
+                        'default' => 50,
+                        'minimum' => 1,
+                        'maximum' => 500,
+                        'sanitize_callback' => 'absint',
+                    ],
                 ],
             ],
         ]);
@@ -450,6 +506,42 @@ class RestController
             [
                 'methods' => WP_REST_Server::EDITABLE,
                 'callback' => [$this, 'update_settings'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+            ],
+        ]);
+
+        // =================================================================
+        // Onboarding Endpoints
+        // =================================================================
+
+        register_rest_route($this->namespace, '/onboarding-status', [
+            [
+                'methods' => WP_REST_Server::READABLE,
+                'callback' => [$this, 'get_onboarding_status'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+            ],
+        ]);
+
+        register_rest_route($this->namespace, '/test-connection', [
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'test_connection'],
+                'permission_callback' => [$this, 'check_admin_permission'],
+                'args' => [
+                    'api_key' => [
+                        'description' => __('The OpenRouter API key to test.', 'ai-entity-index'),
+                        'type' => 'string',
+                        'required' => true,
+                        'sanitize_callback' => 'sanitize_text_field',
+                    ],
+                ],
+            ],
+        ]);
+
+        register_rest_route($this->namespace, '/complete-onboarding', [
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'complete_onboarding'],
                 'permission_callback' => [$this, 'check_admin_permission'],
             ],
         ]);
@@ -937,6 +1029,8 @@ class RestController
             );
         }
 
+        $before = (array) $entity;
+
         // Build update data from request
         $update_fields = ['name', 'type', 'schema_type', 'status', 'description', 'same_as_url', 'wikidata_id'];
         $update_data = [];
@@ -991,6 +1085,10 @@ class RestController
 
         $this->logger->info('Entity updated', ['entity_id' => $id, 'fields' => array_keys($update_data)]);
 
+        // Fetch updated entity once — used for audit log and response
+        $updated_entity = $repository->get_entity($id);
+        AuditLogger::log($id, 'update', $before, (array) $updated_entity);
+
         // Trigger propagation if schema-affecting fields changed
         if (!empty($changed_schema_fields)) {
             /**
@@ -1007,8 +1105,6 @@ class RestController
             ]);
         }
 
-        // Fetch updated entity
-        $updated_entity = $repository->get_entity($id);
         $response_data = $this->format_entity_response($updated_entity);
 
         $response = rest_ensure_response($response_data);
@@ -1039,6 +1135,8 @@ class RestController
             );
         }
 
+        $before = (array) $entity;
+
         if ($force) {
             // Hard delete
             $success = $repository->delete_entity($id);
@@ -1053,6 +1151,9 @@ class RestController
             }
 
             $this->logger->info('Entity permanently deleted', ['entity_id' => $id, 'name' => $entity->name]);
+
+            // Audit log
+            AuditLogger::log($id, 'delete', $before, null);
 
             return rest_ensure_response([
                 'deleted' => true,
@@ -1073,13 +1174,118 @@ class RestController
 
             $this->logger->info('Entity moved to trash', ['entity_id' => $id, 'name' => $entity->name]);
 
+            // Audit log — fetch trashed entity once for audit and response
+            $trashed_entity = $repository->get_entity($id);
+            AuditLogger::log($id, 'trash', $before, (array) $trashed_entity);
+
             // Return updated entity
-            $updated_entity = $repository->get_entity($id);
-            $response = rest_ensure_response($this->format_entity_response($updated_entity));
+            $response = rest_ensure_response($this->format_entity_response($trashed_entity));
             $response->add_links($this->get_entity_links($id));
 
             return $response;
         }
+    }
+
+    /**
+     * Create a new entity.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response|WP_Error The response object or error.
+     */
+    public function create_entity(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $name = $request->get_param('name');
+        $type = strtoupper($request->get_param('type'));
+        $repository = $this->get_entity_repository();
+
+        // Validate name and type
+        if (empty($name) || !Config::isValidType($type)) {
+            return new WP_Error(
+                'rest_invalid_param',
+                __('Invalid name or type.', 'ai-entity-index'),
+                ['status' => 400]
+            );
+        }
+
+        // Check for existing entity with same slug
+        $slug = sanitize_title($name);
+        global $wpdb;
+        $entities_table = $wpdb->prefix . Config::TABLE_ENTITIES;
+        $existing = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT id FROM {$entities_table} WHERE slug = %s",
+                $slug
+            )
+        );
+
+        if ($existing) {
+            return new WP_Error(
+                'rest_entity_exists',
+                sprintf(
+                    __('An entity with the name "%s" already exists.', 'ai-entity-index'),
+                    $name
+                ),
+                ['status' => 409]
+            );
+        }
+
+        // Create entity via upsert (guaranteed new since we checked slug)
+        $aliases = $request->get_param('aliases') ?: [];
+        $entity_id = $repository->upsert_entity($name, $type, $aliases);
+
+        if (!$entity_id) {
+            return new WP_Error(
+                'rest_create_failed',
+                __('Failed to create entity.', 'ai-entity-index'),
+                ['status' => 500]
+            );
+        }
+
+        // Update additional fields not handled by upsert_entity
+        $status = $request->get_param('status') ?: 'raw';
+        $description = $request->get_param('description') ?: '';
+        $update_data = [];
+
+        if ($status !== 'raw') {
+            $update_data['status'] = $status;
+        }
+        if (!empty($description)) {
+            $update_data['description'] = $description;
+        }
+
+        if (!empty($update_data)) {
+            $repository->update_entity($entity_id, $update_data);
+        }
+
+        $this->logger->info('Entity created via REST API', [
+            'entity_id' => $entity_id,
+            'name' => $name,
+            'type' => $type,
+        ]);
+
+        // Audit log — fetch created entity once for audit and response
+        $created_entity = $repository->get_entity($entity_id);
+        AuditLogger::log((int) $entity_id, 'create', null, (array) $created_entity);
+
+        $response_data = $this->format_entity_response($created_entity, true);
+
+        // Include aliases in response
+        $entity_aliases = $repository->get_aliases_for_entity($entity_id);
+        $response_data['aliases'] = array_map(function ($alias) {
+            return [
+                'id' => (int) $alias->id,
+                'alias' => $alias->alias,
+                'alias_slug' => $alias->alias_slug,
+                'source' => $alias->source,
+                'created_at' => $alias->created_at,
+            ];
+        }, $entity_aliases);
+
+        $response = rest_ensure_response($response_data);
+        $response->set_status(201);
+        $response->add_links($this->get_entity_links($entity_id));
+
+        return $response;
     }
 
     /**
@@ -1104,6 +1310,8 @@ class RestController
             );
         }
 
+        $target_before = (array) $target;
+
         // Filter out target from source_ids if present
         $source_ids = array_filter($source_ids, function ($id) use ($target_id) {
             return (int) $id !== $target_id;
@@ -1118,6 +1326,7 @@ class RestController
         }
 
         // Validate all source entities exist
+        $sources_before = [];
         foreach ($source_ids as $source_id) {
             $source = $repository->get_entity((int) $source_id);
             if ($source === null) {
@@ -1127,10 +1336,20 @@ class RestController
                     ['status' => 404]
                 );
             }
+            $sources_before[(int) $source_id] = (array) $source;
         }
 
         // Perform merge
         $affected_posts = $repository->merge_entities($target_id, $source_ids);
+
+        // Audit log each source merge
+        foreach ($sources_before as $sid => $source_data) {
+            AuditLogger::log($sid, 'merge', $source_data, ['merged_into' => $target_id]);
+        }
+
+        // Audit log the target entity
+        $updated_target_for_audit = $repository->get_entity($target_id);
+        AuditLogger::log($target_id, 'merge_target', $target_before, (array) $updated_target_for_audit);
 
         $this->logger->info('Entities merged', [
             'target_id' => $target_id,
@@ -1217,6 +1436,9 @@ class RestController
 
         $this->logger->info('Alias added to entity', ['entity_id' => $entity_id, 'alias' => $alias]);
 
+        // Audit log
+        AuditLogger::log($entity_id, 'add_alias', null, ['alias' => $alias]);
+
         // Get updated aliases
         $updated_aliases = $repository->get_aliases_for_entity($entity_id);
 
@@ -1299,6 +1521,9 @@ class RestController
         }
 
         $this->logger->info('Alias deleted from entity', ['entity_id' => $entity_id, 'alias_id' => $alias_id]);
+
+        // Audit log
+        AuditLogger::log($entity_id, 'delete_alias', ['alias_id' => $alias_id], null);
 
         return rest_ensure_response([
             'deleted' => true,
@@ -1401,15 +1626,19 @@ class RestController
     public function get_logs(WP_REST_Request $request): WP_REST_Response
     {
         $level = $request->get_param('level') ?? 'info';
-        $limit = $request->get_param('limit') ?? 50;
         $date = $request->get_param('date');
+        $page = max(1, (int) ($request->get_param('page') ?? 1));
+        $per_page = max(1, min(500, (int) ($request->get_param('per_page') ?? 50)));
 
         // If specific date requested, we need to handle it
         if ($date) {
-            $logs = $this->get_logs_for_date($date, $level, $limit);
+            $result = $this->get_logs_for_date($date, $level, $per_page, $page);
         } else {
-            $logs = $this->logger->getRecentLogs($limit, $level);
+            $result = $this->logger->getRecentLogsPaginated($per_page, $level, $page);
         }
+
+        $total_count = $result['total'];
+        $logs = $result['entries'];
 
         // Get available log files for reference
         $log_files = $this->logger->getLogFiles();
@@ -1417,6 +1646,10 @@ class RestController
         $response_data = [
             'entries' => $logs,
             'count' => count($logs),
+            'total' => $total_count,
+            'total_pages' => $total_count > 0 ? (int) ceil($total_count / $per_page) : 1,
+            'page' => $page,
+            'per_page' => $per_page,
             'level' => $level,
             'date' => $date ?: gmdate('Y-m-d'),
             'log_files' => array_map(function ($file) {
@@ -1534,6 +1767,111 @@ class RestController
     }
 
     // =========================================================================
+    // Onboarding Endpoint Callbacks
+    // =========================================================================
+
+    /**
+     * GET /onboarding-status
+     * Check whether onboarding has been completed.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response The response object.
+     */
+    public function get_onboarding_status(WP_REST_Request $request): WP_REST_Response
+    {
+        $complete = (bool) get_option('vibe_ai_onboarding_complete', false);
+        $has_constant_key = defined('VIBE_AI_OPENROUTER_KEY') && !empty(VIBE_AI_OPENROUTER_KEY);
+        $has_option_key = !empty(get_option('vibe_ai_openrouter_key', ''));
+
+        return rest_ensure_response([
+            'onboarding_complete' => $complete,
+            'has_api_key' => $has_constant_key || $has_option_key,
+        ]);
+    }
+
+    /**
+     * POST /test-connection
+     * Verify an OpenRouter API key by making a minimal API call.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response The response object.
+     */
+    public function test_connection(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $api_key = sanitize_text_field($request->get_param('api_key'));
+
+        if (empty($api_key)) {
+            return new WP_Error(
+                'test_connection_failed',
+                __('API key is required.', 'ai-entity-index'),
+                ['status' => 400]
+            );
+        }
+
+        $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
+            'timeout' => 15,
+            'headers' => [
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type' => 'application/json',
+            ],
+            'body' => json_encode([
+                'model' => Config::BUDGET_MODEL,
+                'messages' => [['role' => 'user', 'content' => 'Reply with: OK']],
+                'max_tokens' => 5,
+            ]),
+        ]);
+
+        if (is_wp_error($response)) {
+            return new WP_Error(
+                'test_connection_failed',
+                $response->get_error_message(),
+                ['status' => 500]
+            );
+        }
+
+        $code = wp_remote_retrieve_response_code($response);
+
+        if ($code === 200) {
+            // Save the API key as an option so it persists (autoload disabled for security)
+            update_option('vibe_ai_openrouter_key', $api_key, false);
+
+            $this->logger->info('API key validated and saved via onboarding');
+
+            return rest_ensure_response([
+                'success' => true,
+                'message' => __('Connection successful!', 'ai-entity-index'),
+            ]);
+        }
+
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+        $error_message = $body['error']['message'] ?? sprintf(__('API returned status %d.', 'ai-entity-index'), $code);
+
+        return new WP_Error(
+            'test_connection_failed',
+            $error_message,
+            ['status' => $code >= 400 && $code < 500 ? $code : 500]
+        );
+    }
+
+    /**
+     * POST /complete-onboarding
+     * Mark the onboarding wizard as completed.
+     *
+     * @param WP_REST_Request $request The request object.
+     * @return WP_REST_Response The response object.
+     */
+    public function complete_onboarding(WP_REST_Request $request): WP_REST_Response
+    {
+        update_option('vibe_ai_onboarding_complete', true);
+
+        $this->logger->info('Onboarding completed');
+
+        return rest_ensure_response([
+            'success' => true,
+        ]);
+    }
+
+    // =========================================================================
     // Entity Mentions, Propagation, Force-Sync, Bulk Operations
     // =========================================================================
 
@@ -1610,6 +1948,9 @@ class RestController
 
         $this->logger->info('Entity propagation triggered via REST API', ['entity_id' => $id]);
 
+        // Audit log
+        AuditLogger::log($id, 'propagate', null, ['entity_id' => $id]);
+
         return rest_ensure_response([
             'success' => true,
             'message' => __('Entity propagation scheduled.', 'ai-entity-index'),
@@ -1654,6 +1995,9 @@ class RestController
             'posts_synced' => $synced,
         ]);
 
+        // Audit log
+        AuditLogger::log($id, 'force_sync', null, ['entity_id' => $id, 'posts_synced' => $synced]);
+
         return rest_ensure_response([
             'success' => true,
             'message' => sprintf(
@@ -1696,9 +2040,11 @@ class RestController
                 continue;
             }
 
+            $before = (array) $entity;
             $success = $repository->delete_entity($id);
             if ($success) {
                 $deleted[] = $id;
+                AuditLogger::log($id, 'delete', $before, null);
             } else {
                 $failed[] = $id;
             }
@@ -1759,9 +2105,11 @@ class RestController
                 continue;
             }
 
+            $before = (array) $entity;
             $success = $repository->update_entity($id, ['status' => $status]);
             if ($success) {
                 $updated[] = $id;
+                AuditLogger::log($id, 'status_change', $before, ['status' => $status]);
             } else {
                 $failed[] = $id;
             }
@@ -2003,29 +2351,29 @@ class RestController
     /**
      * Get logs for a specific date.
      *
-     * @param string $date  The date in YYYY-MM-DD format.
-     * @param string $level Minimum log level.
-     * @param int    $limit Maximum entries to return.
-     * @return array<array<string, mixed>> Log entries.
+     * @param string $date     The date in YYYY-MM-DD format.
+     * @param string $level    Minimum log level.
+     * @param int    $per_page Number of entries per page.
+     * @param int    $page     Page number (1-indexed).
+     * @return array{entries: array, total: int} Log entries with total count.
      */
-    private function get_logs_for_date(string $date, string $level, int $limit): array
+    private function get_logs_for_date(string $date, string $level, int $per_page, int $page = 1): array
     {
         $upload_dir = wp_upload_dir();
         $log_dir = $upload_dir['basedir'] . '/' . Config::LOG_DIRECTORY;
         $log_file = $log_dir . '/' . $date . '.log';
 
         if (!file_exists($log_file)) {
-            return [];
+            return ['entries' => [], 'total' => 0];
         }
 
         $lines = file($log_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 
         if ($lines === false) {
-            return [];
+            return ['entries' => [], 'total' => 0];
         }
 
         $lines = array_reverse($lines);
-        $entries = [];
         $level_priorities = [
             'debug' => 0,
             'info' => 1,
@@ -2034,11 +2382,9 @@ class RestController
         ];
         $min_priority = $level_priorities[strtolower($level)] ?? 0;
 
+        // First pass: collect all matching entries to get accurate total
+        $all_matching = [];
         foreach ($lines as $line) {
-            if (count($entries) >= $limit) {
-                break;
-            }
-
             $entry = $this->parse_log_line($line);
 
             if ($entry === null) {
@@ -2048,11 +2394,15 @@ class RestController
             $entry_priority = $level_priorities[strtolower($entry['level'])] ?? 0;
 
             if ($entry_priority >= $min_priority) {
-                $entries[] = $entry;
+                $all_matching[] = $entry;
             }
         }
 
-        return $entries;
+        $total = count($all_matching);
+        $offset = ($page - 1) * $per_page;
+        $entries = array_slice($all_matching, $offset, $per_page);
+
+        return ['entries' => $entries, 'total' => $total];
     }
 
     /**

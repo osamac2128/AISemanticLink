@@ -265,6 +265,54 @@ class Logger
     }
 
     /**
+     * Get recent log entries with pagination support.
+     *
+     * @param int    $per_page  Number of entries per page.
+     * @param string $min_level Minimum log level to include.
+     * @param int    $page      Page number (1-indexed).
+     * @return array{entries: array, total: int} Paginated log entries with total count.
+     */
+    public function getRecentLogsPaginated(int $per_page = 50, string $min_level = 'info', int $page = 1): array
+    {
+        $log_file = $this->getLogFilePath();
+
+        if (!file_exists($log_file)) {
+            return ['entries' => [], 'total' => 0];
+        }
+
+        $lines = file($log_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+        if ($lines === false) {
+            return ['entries' => [], 'total' => 0];
+        }
+
+        $lines = array_reverse($lines);
+        $min_priority = self::LEVEL_PRIORITIES[$min_level] ?? 0;
+
+        // Collect all matching entries for accurate total count
+        $all_matching = [];
+        foreach ($lines as $line) {
+            $entry = $this->parseLine($line);
+
+            if ($entry === null) {
+                continue;
+            }
+
+            $level_priority = self::LEVEL_PRIORITIES[strtolower($entry['level'])] ?? 0;
+
+            if ($level_priority >= $min_priority) {
+                $all_matching[] = $entry;
+            }
+        }
+
+        $total = count($all_matching);
+        $offset = ($page - 1) * $per_page;
+        $entries = array_slice($all_matching, $offset, $per_page);
+
+        return ['entries' => $entries, 'total' => $total];
+    }
+
+    /**
      * Parse a log line into structured data.
      *
      * @param string $line Log line to parse
