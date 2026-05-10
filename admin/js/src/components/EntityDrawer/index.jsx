@@ -18,16 +18,20 @@ import {
 	propagateEntity as apiPropagateEntity,
 	forceSyncEntity as apiForceSyncEntity,
 } from '../../api/client';
+import { toast } from 'sonner';
 import IdentitySection from './IdentitySection';
 import SemanticLinksSection from './SemanticLinksSection';
 import AliasesSection from './AliasesSection';
 import MentionsSection from './MentionsSection';
 import ActionButtons from './ActionButtons';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 
 export function EntityDrawer( { isOpen, onClose, entityId } ) {
 	const queryClient = useQueryClient();
 	const [ formData, setFormData ] = useState( null );
 	const [ hasChanges, setHasChanges ] = useState( false );
+	const [ showDeleteConfirm, setShowDeleteConfirm ] = useState( false );
+	const [ showCloseConfirm, setShowCloseConfirm ] = useState( false );
 
 	// Fetch entity data
 	const {
@@ -67,6 +71,10 @@ export function EntityDrawer( { isOpen, onClose, entityId } ) {
 				queryKey: [ 'entity', entityId ],
 			} );
 			setHasChanges( false );
+			toast.success( 'Entity saved' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to save entity' );
 		},
 	} );
 
@@ -76,6 +84,10 @@ export function EntityDrawer( { isOpen, onClose, entityId } ) {
 		onSuccess: () => {
 			queryClient.invalidateQueries( { queryKey: [ 'entities' ] } );
 			onClose();
+			toast.success( 'Entity deleted' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to delete entity' );
 		},
 	} );
 
@@ -87,6 +99,10 @@ export function EntityDrawer( { isOpen, onClose, entityId } ) {
 			queryClient.invalidateQueries( {
 				queryKey: [ 'entity', entityId ],
 			} );
+			toast.success( 'Entity propagated' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to propagate entity' );
 		},
 	} );
 
@@ -98,6 +114,10 @@ export function EntityDrawer( { isOpen, onClose, entityId } ) {
 			queryClient.invalidateQueries( {
 				queryKey: [ 'entity', entityId ],
 			} );
+			toast.success( 'Force sync completed' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to force sync entity' );
 		},
 	} );
 
@@ -151,30 +171,27 @@ export function EntityDrawer( { isOpen, onClose, entityId } ) {
 		if ( ! entityId ) {
 			return;
 		}
+		setShowDeleteConfirm( true );
+	}, [ entityId ] );
 
-		if (
-			window.confirm(
-				'Are you sure you want to delete this entity? This will set its status to "trash".'
-			)
-		) {
-			deleteMutation.mutate( entityId );
-		}
+	const confirmDelete = useCallback( () => {
+		deleteMutation.mutate( entityId );
+		setShowDeleteConfirm( false );
 	}, [ entityId, deleteMutation ] );
 
 	// Handle close with unsaved changes warning
 	const handleClose = useCallback( () => {
 		if ( hasChanges ) {
-			if (
-				window.confirm(
-					'You have unsaved changes. Are you sure you want to close?'
-				)
-			) {
-				onClose();
-			}
+			setShowCloseConfirm( true );
 		} else {
 			onClose();
 		}
 	}, [ hasChanges, onClose ] );
+
+	const confirmClose = useCallback( () => {
+		setShowCloseConfirm( false );
+		onClose();
+	}, [ onClose ] );
 
 	// Handle alias operations
 	const handleAddAlias = useCallback( ( alias ) => {
@@ -391,6 +408,29 @@ export function EntityDrawer( { isOpen, onClose, entityId } ) {
 					</div>
 				</div>
 			</div>
+
+			{ /* Delete Confirmation */ }
+			<ConfirmDialog
+				isOpen={ showDeleteConfirm }
+				title="Delete Entity"
+				message="Are you sure you want to delete this entity? This will set its status to trash."
+				confirmLabel="Delete"
+				variant="danger"
+				onConfirm={ confirmDelete }
+				onCancel={ () => setShowDeleteConfirm( false ) }
+			/>
+
+			{ /* Unsaved Changes Confirmation */ }
+			<ConfirmDialog
+				isOpen={ showCloseConfirm }
+				title="Unsaved Changes"
+				message="You have unsaved changes. Are you sure you want to close?"
+				confirmLabel="Discard Changes"
+				cancelLabel="Keep Editing"
+				variant="danger"
+				onConfirm={ confirmClose }
+				onCancel={ () => setShowCloseConfirm( false ) }
+			/>
 		</div>
 	);
 }

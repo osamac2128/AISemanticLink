@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useKBSettings, useUpdateKBSettings } from '../../hooks/useKB';
 import Button from '../common/Button';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 
 /**
  * Common post types for WordPress.
@@ -196,6 +197,7 @@ export default function KBSettings() {
 	// Form state
 	const [ formData, setFormData ] = useState( null );
 	const [ hasChanges, setHasChanges ] = useState( false );
+	const [ showResetConfirm, setShowResetConfirm ] = useState( false );
 
 	// Initialize form data when settings load
 	useEffect( () => {
@@ -246,14 +248,13 @@ export default function KBSettings() {
 
 	// Handle reset to defaults
 	const handleReset = useCallback( () => {
-		if (
-			window.confirm(
-				'Are you sure you want to reset all settings to defaults?'
-			)
-		) {
-			setFormData( DEFAULT_SETTINGS );
-			setHasChanges( true );
-		}
+		setShowResetConfirm( true );
+	}, [] );
+
+	const confirmReset = useCallback( () => {
+		setFormData( DEFAULT_SETTINGS );
+		setHasChanges( true );
+		setShowResetConfirm( false );
 	}, [] );
 
 	// Loading state
@@ -552,6 +553,16 @@ export default function KBSettings() {
 					</div>
 				</div>
 			</div>
+
+			<ConfirmDialog
+				isOpen={ showResetConfirm }
+				title="Reset to Defaults"
+				message="Are you sure you want to reset all settings to defaults?"
+				confirmLabel="Reset"
+				variant="danger"
+				onConfirm={ confirmReset }
+				onCancel={ () => setShowResetConfirm( false ) }
+			/>
 		</div>
 	);
 }

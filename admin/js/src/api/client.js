@@ -4,6 +4,8 @@
  * Handles all REST API communication with the WordPress backend.
  */
 
+import { toast } from 'sonner';
+
 /**
  * Get vibeAiData from window, with fallbacks.
  */
@@ -16,14 +18,14 @@ const getConfig = () => {
 };
 
 /**
- * Base fetch wrapper with WordPress authentication.
+ * Shared request logic: nonce check, header construction, fetch, and error parsing.
  *
  * @param {string} endpoint - API endpoint (relative to apiUrl).
  * @param {Object} options  - Fetch options.
- * @return {Promise<any>} - Parsed JSON response.
+ * @return {Promise<{response: Response, isJson: boolean}>} Raw response with metadata.
  * @throws {Error} - On network or API error.
  */
-export async function apiFetch( endpoint, options = {} ) {
+async function baseRequest( endpoint, options = {} ) {
 	const config = getConfig();
 	const url = `${ config.apiUrl }${ endpoint }`;
 
@@ -66,6 +68,25 @@ export async function apiFetch( endpoint, options = {} ) {
 		error.status = response.status;
 		error.response = response;
 		throw error;
+	}
+
+	return { response, isJson };
+}
+
+/**
+ * Base fetch wrapper with WordPress authentication.
+ *
+ * @param {string} endpoint - API endpoint (relative to apiUrl).
+ * @param {Object} options  - Fetch options.
+ * @return {Promise<any>} - Parsed JSON response.
+ * @throws {Error} - On network or API error.
+ */
+export async function apiFetch( endpoint, options = {} ) {
+	const { response, isJson } = await baseRequest( endpoint, options );
+
+	// Handle 204 No Content
+	if ( response.status === 204 ) {
+		return null;
 	}
 
 	if ( ! isJson ) {
@@ -75,50 +96,8 @@ export async function apiFetch( endpoint, options = {} ) {
 	return response.json();
 }
 
-async function apiFetchPaginated( endpoint, options = {} ) {
-	const config = getConfig();
-	const url = `${ config.apiUrl }${ endpoint }`;
-
-	if ( ! config.nonce ) {
-		throw new Error( 'Security nonce is missing for API request' );
-	}
-
-	const headers = {
-		'X-WP-Nonce': config.nonce,
-		...options.headers,
-	};
-
-	if ( options.body ) {
-		headers[ 'Content-Type' ] = 'application/json';
-	}
-
-	const response = await fetch( url, {
-		...options,
-		headers,
-		credentials: 'same-origin',
-	} );
-
-	const contentType = response.headers.get( 'content-type' );
-	const isJson = contentType && contentType.includes( 'application/json' );
-
-	if ( ! response.ok ) {
-		let errorMessage = `API Error: ${ response.status } ${ response.statusText }`;
-
-		if ( isJson ) {
-			try {
-				const errorData = await response.json();
-				errorMessage =
-					errorData.message || errorData.error || errorMessage;
-			} catch {
-				// Use default error message
-			}
-		}
-
-		const error = new Error( errorMessage );
-		error.status = response.status;
-		error.response = response;
-		throw error;
-	}
+export async function apiFetchPaginated( endpoint, options = {} ) {
+	const { response, isJson } = await baseRequest( endpoint, options );
 
 	const data = isJson ? await response.json() : { success: true };
 
@@ -280,6 +259,24 @@ export async function deleteEntity( id ) {
 }
 
 /**
+ * Create a new entity.
+ *
+ * @param {Object} data             - Entity data.
+ * @param {string} data.name        - Entity name (required).
+ * @param {string} data.type        - Entity type (required).
+ * @param {string} [data.status]    - Entity status.
+ * @param {string} [data.description] - Entity description.
+ * @param {string[]} [data.aliases] - Array of alias names.
+ * @return {Promise<Object>} Created entity data.
+ */
+export async function createEntity( data ) {
+	return apiFetch( '/entities', {
+		method: 'POST',
+		body: JSON.stringify( data ),
+	} );
+}
+
+/**
  * Merge multiple entities into one.
  *
  * @param {Object}   params            - Merge parameters.
@@ -356,11 +353,12 @@ export async function fetchLogs( params = {} ) {
 		normalizedParams.level = 'info';
 	}
 
-	delete normalizedParams.page;
-	if ( normalizedParams.per_page && ! normalizedParams.limit ) {
-		normalizedParams.limit = normalizedParams.per_page;
-	}
-	delete normalizedParams.per_page;
+	// Preserve page and per_page for server-side pagination
+	const page = normalizedParams.page || 1;
+	const perPage = normalizedParams.per_page || normalizedParams.limit || 50;
+	normalizedParams.page = page;
+	normalizedParams.per_page = perPage;
+	delete normalizedParams.limit;
 
 	Object.entries( normalizedParams ).forEach( ( [ key, value ] ) => {
 		if ( value !== undefined && value !== null ) {
@@ -374,8 +372,8 @@ export async function fetchLogs( params = {} ) {
 	const result = await apiFetch( endpoint );
 	return {
 		logs: ( result.entries || [] ).map( normalizeLogEntry ),
-		totalCount: result.count || ( result.entries || [] ).length,
-		totalPages: 1,
+		totalCount: result.total || result.count || ( result.entries || [] ).length,
+		totalPages: result.total_pages || Math.ceil( ( result.total || 0 ) / perPage ) || 1,
 	};
 }
 
@@ -441,11 +439,69 @@ export async function bulkUpdateEntitiesStatus( { ids, status } ) {
 	} );
 }
 
+// ============================================================================
+// Onboarding Endpoints
+// ============================================================================
+
+/**
+ * Get current onboarding status.
+ *
+ * @return {Promise<Object>} Onboarding status with has_api_key and onboarding_complete flags.
+ */
+export async function getOnboardingStatus() {
+	return apiFetch( '/onboarding-status' );
+}
+
+/**
+ * Test an OpenRouter API key by making a minimal API call.
+ *
+ * @param {string} apiKey - The OpenRouter API key to validate.
+ * @return {Promise<Object>} Result with success boolean or error message.
+ */
+export async function testConnection( apiKey ) {
+	return apiFetch( '/test-connection', {
+		method: 'POST',
+		body: JSON.stringify( { api_key: apiKey } ),
+	} );
+}
+
+/**
+ * Mark onboarding as completed.
+ *
+ * @return {Promise<Object>} Success confirmation.
+ */
+export async function completeOnboarding() {
+	return apiFetch( '/complete-onboarding', { method: 'POST' } );
+}
+
+/**
+ * Create TanStack Query mutation options with toast notifications.
+ *
+ * @param {Object} options
+ * @param {string} [options.successMessage] - Toast message on success.
+ * @param {string} [options.errorMessage]   - Toast message on error.
+ * @return {Object} Mutation options object.
+ */
+export function createMutationOptions( options = {} ) {
+	return {
+		onSuccess: () => {
+			if ( options.successMessage ) {
+				toast.success( options.successMessage );
+			}
+		},
+		onError: ( error ) => {
+			toast.error( options.errorMessage || error.message || 'An error occurred' );
+		},
+	};
+}
+
 export default {
 	apiFetch,
+	apiFetchPaginated,
 	fetchStatus,
 	fetchEntities,
 	fetchEntity,
+	createEntity,
 	updateEntity,
 	deleteEntity,
 	mergeEntities,
@@ -460,4 +516,7 @@ export default {
 	forceSyncEntity,
 	bulkDeleteEntities,
 	bulkUpdateEntitiesStatus,
+	getOnboardingStatus,
+	testConnection,
+	completeOnboarding,
 };

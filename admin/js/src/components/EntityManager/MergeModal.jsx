@@ -11,6 +11,7 @@
 import { useState, useEffect } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { mergeEntities as apiMergeEntities } from '../../api/client';
+import { toast } from 'sonner';
 
 export default function MergeModal( {
 	isOpen,
@@ -39,6 +40,10 @@ export default function MergeModal( {
 			apiMergeEntities( { target_id: targetId, source_ids: sourceIds } ),
 		onSuccess: () => {
 			onMergeComplete();
+			toast.success( 'Entities merged successfully' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to merge entities' );
 		},
 	} );
 

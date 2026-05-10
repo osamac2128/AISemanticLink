@@ -11,51 +11,8 @@ import {
 	keepPreviousData,
 } from '@tanstack/react-query';
 
-/**
- * Get API configuration from window.
- */
-const getConfig = () => {
-	const data = window.vibeAiData || {};
-	return {
-		apiUrl: data.apiUrl || '/wp-json/vibe-ai/v1',
-		nonce: data.nonce || '',
-	};
-};
-
-/**
- * Base API fetch wrapper.
- *
- * @param {string} endpoint - API endpoint.
- * @param {Object} options  - Fetch options.
- * @return {Promise<any>} API response.
- */
-async function apiFetch( endpoint, options = {} ) {
-	const config = getConfig();
-	const url = `${ config.apiUrl }${ endpoint }`;
-
-	const headers = {
-		'X-WP-Nonce': config.nonce,
-		...( options.body ? { 'Content-Type': 'application/json' } : {} ),
-		...options.headers,
-	};
-
-	const response = await fetch( url, {
-		...options,
-		headers,
-		credentials: 'same-origin',
-	} );
-
-	if ( ! response.ok ) {
-		const errorData = await response.json().catch( () => ( {} ) );
-		const error = new Error(
-			errorData.message || `API Error: ${ response.status }`
-		);
-		error.status = response.status;
-		throw error;
-	}
-
-	return response.json();
-}
+import { apiFetch, apiFetchPaginated } from '../api/client';
+import { toast } from 'sonner';
 
 function normalizeKBDocument( document = {} ) {
 	return {
@@ -127,61 +84,6 @@ function normalizeKBSettings( settings = {} ) {
 	};
 }
 
-/**
- * API client methods for KB operations.
- */
-export const apiClient = {
-	/**
-	 * GET request.
-	 * @param endpoint
-	 * @param params
-	 */
-	get: ( endpoint, params = {} ) => {
-		const queryString = new URLSearchParams(
-			Object.entries( params ).filter(
-				( [ , v ] ) => v !== undefined && v !== null && v !== ''
-			)
-		).toString();
-
-		const url = queryString ? `${ endpoint }?${ queryString }` : endpoint;
-		return apiFetch( url );
-	},
-
-	/**
-	 * POST request.
-	 * @param endpoint
-	 * @param data
-	 */
-	post: ( endpoint, data = {} ) => {
-		return apiFetch( endpoint, {
-			method: 'POST',
-			body: JSON.stringify( data ),
-		} );
-	},
-
-	/**
-	 * PUT request.
-	 * @param endpoint
-	 * @param data
-	 */
-	put: ( endpoint, data = {} ) => {
-		return apiFetch( endpoint, {
-			method: 'PUT',
-			body: JSON.stringify( data ),
-		} );
-	},
-
-	/**
-	 * DELETE request.
-	 * @param endpoint
-	 */
-	delete: ( endpoint ) => {
-		return apiFetch( endpoint, {
-			method: 'DELETE',
-		} );
-	},
-};
-
 // ============================================================================
 // Knowledge Base Hooks
 // ============================================================================
@@ -197,7 +99,7 @@ export function useKBStatus() {
 	return useQuery( {
 		queryKey: [ 'kb-status' ],
 		queryFn: async () =>
-			normalizeKBStatus( await apiClient.get( '/kb/status' ) ),
+			normalizeKBStatus( await apiFetch( '/kb/status' ) ),
 		refetchInterval: ( query ) => {
 			return query?.state?.data?.pipeline?.running ? 2000 : false;
 		},
@@ -213,10 +115,13 @@ export function useKBStatus() {
 export function useKBSearch() {
 	return useMutation( {
 		mutationFn: ( { query, topK, filters } ) =>
-			apiClient.post( '/kb/search', {
-				query,
-				top_k: topK,
-				filters,
+			apiFetch( '/kb/search', {
+				method: 'POST',
+				body: JSON.stringify( {
+					query,
+					top_k: topK,
+					filters,
+				} ),
 			} ),
 	} );
 }
@@ -233,7 +138,6 @@ export function useKBDocuments( page, perPage, filters = {} ) {
 	return useQuery( {
 		queryKey: [ 'kb-docs', page, perPage, filters ],
 		queryFn: async () => {
-			const config = getConfig();
 			const params = new URLSearchParams( {
 				page: page.toString(),
 				per_page: perPage.toString(),
@@ -242,34 +146,13 @@ export function useKBDocuments( page, perPage, filters = {} ) {
 				...( filters.status && { status: filters.status } ),
 			} );
 
-			const response = await fetch(
-				`${ config.apiUrl }/kb/docs?${ params }`,
-				{
-					headers: {
-						'X-WP-Nonce': config.nonce,
-					},
-					credentials: 'same-origin',
-				}
-			);
-
-			if ( ! response.ok ) {
-				throw new Error( 'Failed to fetch documents' );
-			}
-
-			const docs = await response.json();
-			const totalCount = parseInt(
-				response.headers.get( 'X-WP-Total' ) || '0',
-				10
-			);
-			const totalPages = parseInt(
-				response.headers.get( 'X-WP-TotalPages' ) || '1',
-				10
-			);
+			const result = await apiFetchPaginated( `/kb/docs?${ params }` );
+			const docs = result.data;
 
 			return {
 				docs: ( docs.documents || [] ).map( normalizeKBDocument ),
-				total_count: totalCount || docs.total || 0,
-				total_pages: totalPages || docs.total_pages || 1,
+				total_count: result.totalCount || docs.total || 0,
+				total_pages: result.totalPages || docs.total_pages || 1,
 			};
 		},
 		placeholderData: keepPreviousData,
@@ -287,7 +170,7 @@ export function useKBDocument( postId ) {
 	return useQuery( {
 		queryKey: [ 'kb-doc', postId ],
 		queryFn: async () => {
-			const document = await apiClient.get( `/kb/docs/${ postId }` );
+			const document = await apiFetch( `/kb/docs/${ postId }` );
 			return {
 				...normalizeKBDocument( document ),
 				chunks: document.chunks || [],
@@ -314,7 +197,9 @@ export function useKBReindex() {
 			if ( postIds.length > 0 ) {
 				const responses = await Promise.all(
 					postIds.map( ( postId ) =>
-						apiClient.post( `/kb/docs/${ postId }/reindex` )
+						apiFetch( `/kb/docs/${ postId }/reindex`, {
+							method: 'POST',
+						} )
 					)
 				);
 
@@ -326,14 +211,21 @@ export function useKBReindex() {
 					  };
 			}
 
-			return apiClient.post( '/kb/reindex', {
-				post_types: options.post_types,
-				force: options.force ?? options.full ?? false,
+			return apiFetch( '/kb/reindex', {
+				method: 'POST',
+				body: JSON.stringify( {
+					post_types: options.post_types,
+					force: options.force ?? options.full ?? false,
+				} ),
 			} );
 		},
 		onSuccess: () => {
 			queryClient.invalidateQueries( { queryKey: [ 'kb-status' ] } );
 			queryClient.invalidateQueries( { queryKey: [ 'kb-docs' ] } );
+			toast.success( 'Reindex started' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to start reindex' );
 		},
 	} );
 }
@@ -347,7 +239,7 @@ export function useKBSettings() {
 	return useQuery( {
 		queryKey: [ 'kb-settings' ],
 		queryFn: async () =>
-			normalizeKBSettings( await apiClient.get( '/kb/settings' ) ),
+			normalizeKBSettings( await apiFetch( '/kb/settings' ) ),
 		staleTime: 60000, // 1 minute
 	} );
 }
@@ -362,17 +254,24 @@ export function useUpdateKBSettings() {
 
 	return useMutation( {
 		mutationFn: ( settings ) =>
-			apiClient.post( '/kb/settings', {
-				kb_enabled: settings.kb_enabled ?? settings.enabled,
-				embedding_model: settings.embedding_model,
-				chunk_size: settings.chunk_size ?? settings.chunk_target_tokens,
-				chunk_overlap:
-					settings.chunk_overlap ?? settings.chunk_overlap_tokens,
-				post_types: settings.post_types,
-				auto_index: settings.auto_index,
+			apiFetch( '/kb/settings', {
+				method: 'POST',
+				body: JSON.stringify( {
+					kb_enabled: settings.kb_enabled ?? settings.enabled,
+					embedding_model: settings.embedding_model,
+					chunk_size: settings.chunk_size ?? settings.chunk_target_tokens,
+					chunk_overlap:
+						settings.chunk_overlap ?? settings.chunk_overlap_tokens,
+					post_types: settings.post_types,
+					auto_index: settings.auto_index,
+				} ),
 			} ),
 		onSuccess: () => {
 			queryClient.invalidateQueries( { queryKey: [ 'kb-settings' ] } );
+			toast.success( 'KB settings saved' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to save KB settings' );
 		},
 	} );
 }
@@ -387,13 +286,20 @@ export function useKBExclude() {
 
 	return useMutation( {
 		mutationFn: ( { postIds, exclude } ) =>
-			apiClient.post( '/kb/docs/exclude', {
-				post_ids: postIds,
-				exclude,
+			apiFetch( '/kb/docs/exclude', {
+				method: 'POST',
+				body: JSON.stringify( {
+					post_ids: postIds,
+					exclude,
+				} ),
 			} ),
 		onSuccess: () => {
 			queryClient.invalidateQueries( { queryKey: [ 'kb-docs' ] } );
 			queryClient.invalidateQueries( { queryKey: [ 'kb-status' ] } );
+			toast.success( 'Documents updated' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to update documents' );
 		},
 	} );
 }
@@ -410,11 +316,16 @@ export function useKBLogs( params = {} ) {
 	return useQuery( {
 		queryKey: [ 'kb-logs', perPage, component, level ],
 		queryFn: async () => {
-			const logs = await apiClient.get( '/kb/logs', {
-				limit: perPage,
-				component,
-				...( level && { level } ),
-			} );
+			const params = new URLSearchParams(
+				Object.entries( {
+					limit: perPage,
+					component,
+					...( level && { level } ),
+				} ).filter( ( [ , v ] ) => v !== undefined && v !== null && v !== '' )
+			).toString();
+
+			const url = params ? `/kb/logs?${ params }` : '/kb/logs';
+			const logs = await apiFetch( url );
 
 			return {
 				logs: logs.entries || [],
@@ -438,5 +349,4 @@ export default {
 	useUpdateKBSettings,
 	useKBExclude,
 	useKBLogs,
-	apiClient,
 };

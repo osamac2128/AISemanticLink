@@ -22,11 +22,14 @@ import {
 	bulkDeleteEntities,
 	bulkUpdateEntitiesStatus,
 } from '../../api/client';
+import { toast } from 'sonner';
 import EntityTable from './EntityTable';
 import BulkActions from './BulkActions';
 import Filters from './Filters';
 import MergeModal from './MergeModal';
+import CreateEntityModal from './CreateEntityModal';
 import { EntityDrawer } from '../EntityDrawer';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 
 export const ENTITY_TYPES = [
 	{ value: 'PERSON', label: 'Person' },
@@ -39,6 +42,8 @@ export const ENTITY_TYPES = [
 	{ value: 'EVENT', label: 'Event' },
 	{ value: 'WORK', label: 'Creative Work' },
 	{ value: 'CONCEPT', label: 'Concept' },
+	{ value: 'TECHNOLOGY', label: 'Technology' },
+	{ value: 'BRAND', label: 'Brand' },
 ];
 
 export const ENTITY_STATUSES = [
@@ -79,9 +84,11 @@ export default function EntityManager() {
 
 	// UI state
 	const [ isMergeModalOpen, setIsMergeModalOpen ] = useState( false );
+	const [ isCreateModalOpen, setIsCreateModalOpen ] = useState( false );
 	const [ selectedEntityId, setSelectedEntityId ] = useState( null );
 	const [ isDrawerOpen, setIsDrawerOpen ] = useState( false );
 	const [ editingCell, setEditingCell ] = useState( null );
+	const [ showBulkDeleteConfirm, setShowBulkDeleteConfirm ] = useState( false );
 
 	// Fetch entities
 	const { data, isLoading, isError, error, isFetching } = useQuery( {
@@ -149,6 +156,7 @@ export default function EntityManager() {
 					context.previousData
 				);
 			}
+			toast.error( err.message || 'Failed to update entity' );
 		},
 		onSettled: () => {
 			queryClient.invalidateQueries( { queryKey: [ 'entities' ] } );
@@ -160,6 +168,10 @@ export default function EntityManager() {
 		onSuccess: () => {
 			setRowSelection( {} );
 			queryClient.invalidateQueries( { queryKey: [ 'entities' ] } );
+			toast.success( 'Entities deleted' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to delete entities' );
 		},
 	} );
 
@@ -168,6 +180,10 @@ export default function EntityManager() {
 		onSuccess: () => {
 			setRowSelection( {} );
 			queryClient.invalidateQueries( { queryKey: [ 'entities' ] } );
+			toast.success( 'Status updated' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to update status' );
 		},
 	} );
 
@@ -214,14 +230,12 @@ export default function EntityManager() {
 		if ( selectedIds.length === 0 ) {
 			return;
 		}
+		setShowBulkDeleteConfirm( true );
+	}, [ selectedIds ] );
 
-		if (
-			window.confirm(
-				`Are you sure you want to delete ${ selectedIds.length } entities? This action cannot be undone.`
-			)
-		) {
-			deleteMutation.mutate( selectedIds );
-		}
+	const confirmBulkDelete = useCallback( () => {
+		deleteMutation.mutate( selectedIds );
+		setShowBulkDeleteConfirm( false );
 	}, [ selectedIds, deleteMutation ] );
 
 	const handleBulkStatusChange = useCallback(
@@ -337,12 +351,33 @@ export default function EntityManager() {
 						{ data?.totalCount || 0 } total entities
 					</p>
 				</div>
-				{ isFetching && ! isLoading && (
-					<div className="flex items-center gap-2 text-sm text-gray-500">
-						<div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-						Refreshing...
-					</div>
-				) }
+				<div className="flex items-center gap-3">
+					<button
+						onClick={ () => setIsCreateModalOpen( true ) }
+						className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 inline-flex items-center gap-1.5"
+					>
+						<svg
+							className="w-4 h-4"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+						>
+							<path
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								strokeWidth={ 2 }
+								d="M12 4v16m8-8H4"
+							/>
+						</svg>
+						Create Entity
+					</button>
+					{ isFetching && ! isLoading && (
+						<div className="flex items-center gap-2 text-sm text-gray-500">
+							<div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+							Refreshing...
+						</div>
+					) }
+				</div>
 			</div>
 
 			{ /* Filters */ }
@@ -392,6 +427,21 @@ export default function EntityManager() {
 				isOpen={ isDrawerOpen }
 				onClose={ handleDrawerClose }
 				entityId={ selectedEntityId }
+			/>
+
+			<ConfirmDialog
+				isOpen={ showBulkDeleteConfirm }
+				title="Delete Entities"
+				message={ `Are you sure you want to delete ${ selectedIds.length } entities? This action cannot be undone.` }
+				confirmLabel="Delete"
+				variant="danger"
+				onConfirm={ confirmBulkDelete }
+				onCancel={ () => setShowBulkDeleteConfirm( false ) }
+			/>
+
+			<CreateEntityModal
+				isOpen={ isCreateModalOpen }
+				onClose={ () => setIsCreateModalOpen( false ) }
 			/>
 		</div>
 	);

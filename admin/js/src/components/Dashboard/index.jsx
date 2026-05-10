@@ -5,6 +5,8 @@
  */
 
 import { useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import useStatus from '../../hooks/useStatus';
 import usePipeline from '../../hooks/usePipeline';
 import Card from '../common/Card';
@@ -15,6 +17,8 @@ import PulseBar from './PulseBar';
 import SemanticHealthPanel from './SemanticHealthPanel';
 import StatsCards from './StatsCards';
 import LiveTerminal from './LiveTerminal';
+import { getOnboardingStatus } from '../../api/client';
+import OnboardingWizard from '../Onboarding/OnboardingWizard';
 
 /**
  * Play icon SVG.
@@ -69,6 +73,14 @@ const RefreshIcon = () => (
  * @return {JSX.Element} Dashboard element.
  */
 export default function Dashboard() {
+	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+
+	const { data: onboardingData, isLoading: onboardingLoading } = useQuery( {
+		queryKey: [ 'onboarding-status' ],
+		queryFn: getOnboardingStatus,
+	} );
+
 	// Hooks
 	const {
 		status,
@@ -120,6 +132,14 @@ export default function Dashboard() {
 
 	// Error display
 	const error = statusError || pipelineError;
+
+	if ( ! onboardingLoading && onboardingData && ! onboardingData.onboarding_complete ) {
+		return (
+			<OnboardingWizard
+				onComplete={ () => queryClient.invalidateQueries( { queryKey: [ 'onboarding-status' ] } ) }
+			/>
+		);
+	}
 
 	return (
 		<div className="p-6 space-y-6">
@@ -285,7 +305,7 @@ export default function Dashboard() {
 				<Card
 					hover
 					className="cursor-pointer"
-					onClick={ () => ( window.location.href = '#/entities' ) }
+					onClick={ () => navigate( '/entities' ) }
 				>
 					<div className="flex items-center gap-4">
 						<div className="p-3 bg-wp-primary/10 rounded-lg">
@@ -317,7 +337,7 @@ export default function Dashboard() {
 				<Card
 					hover
 					className="cursor-pointer"
-					onClick={ () => ( window.location.href = '#/settings' ) }
+					onClick={ () => navigate( '/settings' ) }
 				>
 					<div className="flex items-center gap-4">
 						<div className="p-3 bg-green-100 rounded-lg">
@@ -355,7 +375,7 @@ export default function Dashboard() {
 				<Card
 					hover
 					className="cursor-pointer"
-					onClick={ () => ( window.location.href = '#/logs' ) }
+					onClick={ () => navigate( '/logs' ) }
 				>
 					<div className="flex items-center gap-4">
 						<div className="p-3 bg-amber-100 rounded-lg">

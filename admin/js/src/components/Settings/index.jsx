@@ -14,6 +14,7 @@ import {
 	fetchSettings as apiFetchSettings,
 	updateSettings as apiUpdateSettings,
 } from '../../api/client';
+import { toast } from 'sonner';
 
 // Available AI models (via OpenRouter)
 const AI_MODELS = [
@@ -160,6 +161,10 @@ export default function Settings() {
 		onSuccess: () => {
 			queryClient.invalidateQueries( { queryKey: [ 'settings' ] } );
 			setHasChanges( false );
+			toast.success( 'Settings saved' );
+		},
+		onError: ( error ) => {
+			toast.error( error.message || 'Failed to save settings' );
 		},
 	} );
 

@@ -89,9 +89,8 @@ export default function Header( { onToggleSidebar, vibeAiData } ) {
 				<div className="flex items-center gap-3">
 					{ /* Documentation link */ }
 					<a
-						href="https://developer.example.com/ai-entity-index"
-						target="_blank"
-						rel="noopener noreferrer"
+						href="#"
+						title="Documentation coming soon"
 						className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
 					>
 						<span>Docs</span>

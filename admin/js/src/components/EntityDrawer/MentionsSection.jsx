@@ -10,26 +10,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { fetchEntityMentions } from '../../api/client';
-
-// Confidence badge component
-function ConfidenceBadge( { confidence } ) {
-	const percentage = Math.round( confidence * 100 );
-
-	let colorClass = 'bg-green-100 text-green-700';
-	if ( percentage < 60 ) {
-		colorClass = 'bg-red-100 text-red-700';
-	} else if ( percentage < 85 ) {
-		colorClass = 'bg-yellow-100 text-yellow-700';
-	}
-
-	return (
-		<span
-			className={ `inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${ colorClass }` }
-		>
-			{ percentage }%
-		</span>
-	);
-}
+import { getConfidenceTier } from '../../utils/confidence';
 
 export default function MentionsSection( { entityId } ) {
 	const {
@@ -132,9 +113,17 @@ export default function MentionsSection( { entityId } ) {
 											`Post #${ mention.post_id }` }
 									</a>
 								</div>
-								<ConfidenceBadge
-									confidence={ mention.confidence }
-								/>
+							{ (() => {
+										const { pct, color, tooltip } = getConfidenceTier( mention.confidence );
+										return (
+											<span
+												className={ `inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${ color }` }
+												title={ tooltip }
+											>
+												{ pct }%
+											</span>
+										);
+									})() }
 							</div>
 
 							{ /* Context snippet */ }

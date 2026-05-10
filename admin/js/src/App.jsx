@@ -7,8 +7,10 @@
 import { Suspense, lazy, useCallback, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'sonner';
 import Header from './components/Layout/Header';
 import Sidebar from './components/Layout/Sidebar';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 const Dashboard = lazy( () => import( './components/Dashboard' ) );
 const EntityManager = lazy( () => import( './components/EntityManager' ) );
@@ -63,8 +65,20 @@ export default function App() {
 		setSidebarCollapsed( ( prev ) => ! prev );
 	}, [] );
 
+	// TODO: Add event listeners in EntityManager/EntityDrawer for these
+	// dispatched events so the shortcuts actually do something.
+	useKeyboardShortcuts( {
+		'ctrl+k': useCallback( () => {
+			window.dispatchEvent( new CustomEvent( 'vibe-ai:focus-search' ) );
+		}, [] ),
+		escape: useCallback( () => {
+			window.dispatchEvent( new CustomEvent( 'vibe-ai:close-drawer' ) );
+		}, [] ),
+	} );
+
 	return (
 		<QueryClientProvider client={ queryClient }>
+			<Toaster position="bottom-right" richColors closeButton />
 			<HashRouter>
 				<div
 					id="vibe-ai-admin"

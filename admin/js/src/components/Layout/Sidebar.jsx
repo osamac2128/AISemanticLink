@@ -4,6 +4,7 @@
  * Navigation sidebar for the admin interface.
  */
 
+import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 
 /**
@@ -130,6 +131,23 @@ const NAV_ITEMS = [
  */
 export default function Sidebar( { collapsed } ) {
 	const location = useLocation();
+	const [ kbExpanded, setKbExpanded ] = useState( false );
+
+	const isItemActive = ( item ) => {
+		if ( location.pathname === item.path ) return true;
+		if (
+			item.path !== '/dashboard' &&
+			location.pathname.startsWith( item.path )
+		)
+			return true;
+		// Check children paths too
+		if ( item.children ) {
+			return item.children.some( ( child ) =>
+				location.pathname.startsWith( child.path )
+			);
+		}
+		return false;
+	};
 
 	return (
 		<aside
@@ -142,11 +160,126 @@ export default function Sidebar( { collapsed } ) {
 		>
 			<nav className="p-3 space-y-1">
 				{ NAV_ITEMS.map( ( item ) => {
-					const isActive =
-						location.pathname === item.path ||
-						( item.path !== '/dashboard' &&
-							location.pathname.startsWith( item.path ) );
+					const isActive = isItemActive( item );
+					const hasChildren = item.children && item.children.length > 0;
 
+					// Items with children: render as button + sub-items
+					if ( hasChildren ) {
+						return (
+							<li
+								key={ item.path }
+								className="relative group list-none"
+							>
+								{ /* Main item button */ }
+								<button
+									type="button"
+									onClick={ () => {
+										if ( collapsed ) return; // flyout handles nav
+										setKbExpanded( ( prev ) => ! prev );
+									} }
+									className={ `
+                    flex items-center gap-3 w-full px-3 py-2.5 rounded-lg
+                    transition-colors duration-150
+                    ${
+						isActive
+							? 'bg-wp-primary/10 text-wp-primary'
+							: 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+					}
+                  ` }
+									title={ collapsed ? item.label : undefined }
+								>
+									<span
+										className={ `flex-shrink-0 ${
+											isActive ? 'text-wp-primary' : ''
+										}` }
+									>
+										{ item.icon }
+									</span>
+									{ ! collapsed && (
+										<>
+											<span className="font-medium truncate flex-1 text-left">
+												{ item.label }
+											</span>
+											<svg
+												className={ `w-4 h-4 transition-transform duration-200 ${
+													kbExpanded ? 'rotate-90' : ''
+												}` }
+												fill="none"
+												stroke="currentColor"
+												viewBox="0 0 24 24"
+											>
+												<path
+													strokeLinecap="round"
+													strokeLinejoin="round"
+													strokeWidth={ 2 }
+													d="M9 5l7 7-7 7"
+												/>
+											</svg>
+										</>
+									) }
+								</button>
+
+								{ /* Inline sub-items when expanded */ }
+								{ ! collapsed && kbExpanded && (
+									<div className="ml-6 mt-1 space-y-1 border-l-2 border-slate-200 pl-3">
+										{ item.children.map( ( child ) => {
+											const childActive =
+												location.pathname === child.path;
+											return (
+												<NavLink
+													key={ child.path }
+													to={ child.path }
+													className={ `
+                          flex items-center gap-2 px-3 py-1.5 rounded-md
+                          text-sm transition-colors duration-150
+                          ${
+								childActive
+									? 'bg-wp-primary/10 text-wp-primary font-medium'
+									: 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+							}
+                        ` }
+												>
+													{ child.name }
+												</NavLink>
+											);
+										} ) }
+									</div>
+								) }
+
+								{ /* Flyout menu when collapsed */ }
+								{ collapsed && (
+									<div className="absolute left-full top-0 ml-2 bg-white border border-gray-200 rounded-lg shadow-lg py-2 min-w-[200px] z-50 hidden group-hover:block">
+										<div className="px-4 py-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+											{ item.label }
+										</div>
+										{ item.children.map( ( child ) => {
+											const childActive =
+												location.pathname === child.path;
+											return (
+												<NavLink
+													key={ child.path }
+													to={ child.path }
+													className={ `
+                          flex items-center gap-2 px-4 py-2 text-sm
+                          transition-colors duration-150
+                          ${
+								childActive
+									? 'bg-wp-primary/10 text-wp-primary font-medium'
+									: 'text-gray-700 hover:bg-gray-50'
+							}
+                        ` }
+												>
+													{ child.name }
+												</NavLink>
+											);
+										} ) }
+									</div>
+								) }
+							</li>
+						);
+					}
+
+					// Regular items without children
 					return (
 						<NavLink
 							key={ item.path }

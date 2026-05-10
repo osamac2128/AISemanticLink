@@ -16,6 +16,7 @@ import {
 	flexRender,
 } from '@tanstack/react-table';
 import { ENTITY_TYPES, ENTITY_STATUSES } from './index';
+import { getConfidenceTier } from '../../utils/confidence';
 
 // Sync indicator component
 function SyncIndicator( { isPropagating, mentionCount } ) {
@@ -444,6 +445,76 @@ export default function EntityTable( {
 					</span>
 				),
 				size: 100,
+			},
+			// Quality column (sortable)
+			{
+				accessorKey: 'confidence',
+				header: ( { column } ) => (
+					<button
+						onClick={ () => column.toggleSorting() }
+						className="flex items-center gap-1 font-medium text-gray-900 hover:text-blue-600"
+					>
+						Quality
+						{ column.getIsSorted() === 'asc' && (
+							<svg
+								className="w-4 h-4"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+							>
+								<path
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									strokeWidth={ 2 }
+									d="M5 15l7-7 7 7"
+								/>
+							</svg>
+						) }
+						{ column.getIsSorted() === 'desc' && (
+							<svg
+								className="w-4 h-4"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+							>
+								<path
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									strokeWidth={ 2 }
+									d="M19 9l-7 7-7-7"
+								/>
+							</svg>
+						) }
+						{ ! column.getIsSorted() && (
+							<svg
+								className="w-4 h-4 text-gray-300"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+							>
+								<path
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									strokeWidth={ 2 }
+									d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
+								/>
+							</svg>
+						) }
+					</button>
+				),
+				cell: ( { getValue } ) => {
+					const { pct, color, tooltip } = getConfidenceTier( getValue() );
+
+					return (
+						<span
+							className={ `inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${ color }` }
+							title={ tooltip }
+						>
+							{ pct }%
+						</span>
+					);
+				},
+				size: 90,
 			},
 			// Status column (sortable, multi-select filter)
 			{
