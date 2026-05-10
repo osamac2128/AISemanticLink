@@ -18,7 +18,7 @@ class Activator
     private const DB_VERSION_OPTION = 'vibe_ai_db_version';
 
     /** @var string Current database schema version */
-    private const DB_VERSION = '1.1.0';
+    private const DB_VERSION = '1.2.0';
 
     /**
      * Plugin activation callback.
@@ -43,6 +43,9 @@ class Activator
 
         // Create Knowledge Base tables
         self::createKBTables();
+
+        // Create Audit Log table
+        self::createAuditTable();
 
         // Set default options
         self::setDefaultOptions();
@@ -379,6 +382,38 @@ class Activator
     }
 
     /**
+     * Create Audit Log database table.
+     *
+     * @return void
+     */
+    private static function createAuditTable(): void
+    {
+        global $wpdb;
+
+        $charset_collate = $wpdb->get_charset_collate();
+        $prefix = $wpdb->prefix;
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        $audit_table = $prefix . Config::TABLE_AUDIT_LOG;
+        $audit_sql = "CREATE TABLE {$audit_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            entity_id bigint(20) unsigned NOT NULL,
+            action varchar(50) NOT NULL,
+            user_id bigint(20) unsigned NOT NULL,
+            before_data longtext,
+            after_data longtext,
+            created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY idx_entity (entity_id),
+            KEY idx_user (user_id),
+            KEY idx_created (created_at)
+        ) {$charset_collate};";
+
+        dbDelta($audit_sql);
+    }
+
+    /**
      * Set default plugin options.
      *
      * @return void
@@ -452,6 +487,7 @@ class Activator
         if (version_compare($installed_version, self::DB_VERSION, '<')) {
             self::createTables();
             self::createKBTables();
+            self::createAuditTable();
             self::migrateKBLegacyColumns();
             update_option(self::DB_VERSION_OPTION, self::DB_VERSION);
         }
@@ -543,6 +579,9 @@ class Activator
         $kb_chunks_table = $wpdb->prefix . Config::TABLE_KB_CHUNKS;
         $kb_docs_table = $wpdb->prefix . Config::TABLE_KB_DOCS;
 
+        // Audit log table
+        $audit_table = $wpdb->prefix . Config::TABLE_AUDIT_LOG;
+
         $wpdb->query("DROP TABLE IF EXISTS {$mentions_table}");
         $wpdb->query("DROP TABLE IF EXISTS {$aliases_table}");
         $wpdb->query("DROP TABLE IF EXISTS {$entities_table}");
@@ -551,6 +590,9 @@ class Activator
         $wpdb->query("DROP TABLE IF EXISTS {$kb_vectors_table}");
         $wpdb->query("DROP TABLE IF EXISTS {$kb_chunks_table}");
         $wpdb->query("DROP TABLE IF EXISTS {$kb_docs_table}");
+
+        // Drop audit log table
+        $wpdb->query("DROP TABLE IF EXISTS {$audit_table}");
 
         // Delete all plugin options
         $wpdb->query(

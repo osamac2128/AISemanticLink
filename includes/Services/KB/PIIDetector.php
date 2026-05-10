@@ -183,4 +183,24 @@ class PIIDetector
     {
         unset($this->patterns[$type]);
     }
+
+    /**
+     * Scan content for PII and return an object with findings.
+     *
+     * Wraps detect() to provide an object-based API compatible with
+     * the entity extraction pipeline.
+     *
+     * @param string $content The content to scan.
+     * @return object{hasPii: bool, findings: array<string>, original: string}
+     */
+    public function scan(string $content): object
+    {
+        $detection = $this->detect($content);
+
+        return (object) [
+            'hasPii' => $detection['has_pii'],
+            'findings' => $detection['types'],
+            'original' => $content,
+        ];
+    }
 }
