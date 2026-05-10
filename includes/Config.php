@@ -43,14 +43,11 @@ class Config
     /** @var string Default AI model for entity extraction (Claude Opus 4.5 via OpenRouter) */
     public const DEFAULT_MODEL = 'anthropic/claude-opus-4.5';
 
-    /** @var string Legacy alias for extraction model */
-    public const DEFAULT_ENTITY_EXTRACTION_MODEL = self::DEFAULT_MODEL;
-
     /** @var string Fallback model when primary is unavailable */
-    public const FALLBACK_MODEL = 'anthropic/claude-opus-4.5';
+    public const FALLBACK_MODEL = 'anthropic/claude-sonnet-4-20250514';
 
-    /** @var string Budget model for high-volume processing */
-    public const BUDGET_MODEL = 'anthropic/claude-opus-4.5';
+    /** @var string Budget model for high-volume processing (extraction, scoring) */
+    public const BUDGET_MODEL = 'openai/gpt-4.1-mini';
 
     /** @var int Maximum tokens for AI response */
     public const MAX_TOKENS = 4096;
@@ -144,6 +141,9 @@ class Config
     /** @var string Database table name for KB vectors (without prefix) */
     public const TABLE_KB_VECTORS = 'ai_kb_vectors';
 
+    /** @var string Database table name for audit log (without prefix) */
+    public const TABLE_AUDIT_LOG = 'ai_audit_log';
+
     // =================================================================
     // Post Meta Keys
     // =================================================================
@@ -172,10 +172,12 @@ class Config
         'SOFTWARE' => 'SoftwareApplication',
         'EVENT' => 'Event',
         'WORK' => 'CreativeWork',
-        'CONCEPT' => 'Thing',
+        'CONCEPT' => 'DefinedTerm',
+        'TECHNOLOGY' => 'Thing',
+        'BRAND' => 'Brand',
     ];
 
-    /** @var array<string> Valid entity types */
+    /** @var array<string> Valid entity types (must match TYPE_MAPPING keys) */
     public const VALID_TYPES = [
         'PERSON',
         'ORG',
@@ -187,6 +189,8 @@ class Config
         'EVENT',
         'WORK',
         'CONCEPT',
+        'TECHNOLOGY',
+        'BRAND',
     ];
 
     /** @var array<string> Valid entity statuses */

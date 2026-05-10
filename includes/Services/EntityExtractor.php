@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Services;
 
+use Vibe\AIIndex\Config;
+use Vibe\AIIndex\Prompts\PromptManager;
 use Vibe\AIIndex\Services\Exceptions\RateLimitException;
+use Vibe\AIIndex\Services\KB\PIIDetector;
+use Vibe\AIIndex\Services\ModelRouter;
 
 /**
  * Entity extraction service.
@@ -17,70 +21,40 @@ use Vibe\AIIndex\Services\Exceptions\RateLimitException;
 class EntityExtractor
 {
     /**
-     * Minimum confidence threshold for accepting entities.
-     */
-    private const MIN_CONFIDENCE_THRESHOLD = 0.4;
-
-    /**
-     * Maximum entities to extract per post.
-     */
-    private const MAX_ENTITIES_PER_POST = 50;
-
-    /**
-     * Maximum context snippet length.
-     */
-    private const MAX_CONTEXT_LENGTH = 100;
-
-    /**
-     * Allowed entity types.
-     *
-     * @var array<string>
-     */
-    private const ALLOWED_TYPES = [
-        'PERSON',
-        'ORG',
-        'COMPANY',
-        'LOCATION',
-        'COUNTRY',
-        'PRODUCT',
-        'SOFTWARE',
-        'EVENT',
-        'WORK',
-        'CONCEPT',
-    ];
-
-    /**
-     * The system prompt for entity extraction.
-     */
-    private const SYSTEM_PROMPT = <<<'PROMPT'
-You are an expert Semantic Knowledge Graph Engineer specializing in Named Entity Recognition and normalization for SEO and AI discoverability.
-
-CORE RULES:
-1. Extract ONLY Named Entities (proper nouns with specific identity)
-2. IGNORE generic nouns, adjectives, and common concepts
-3. NORMALIZE names to their most complete, canonical form
-4. RESOLVE ambiguity using context
-5. Assign appropriate TYPE from: PERSON, ORG, COMPANY, LOCATION, COUNTRY, PRODUCT, SOFTWARE, EVENT, WORK, CONCEPT
-6. Provide CONFIDENCE score (0.0-1.0) based on extraction certainty
-7. Include CONTEXT snippet (exact quote, max 100 chars) showing entity mention
-
-RESPONSE FORMAT (strict JSON only, no markdown):
-{"entities": [{"name": "Canonical Name", "type": "TYPE", "confidence": 0.95, "context": "...snippet...", "aliases": ["alternate name"]}]}
-PROMPT;
-
-    /**
      * The AI client for making API requests.
      */
     private AIClient $ai_client;
 
     /**
+     * Optional prompt manager for versioned prompt delivery.
+     */
+    private ?PromptManager $prompt_manager = null;
+
+    /**
+     * PII scanner instance for content moderation.
+     */
+    private $piiScanner;
+
+    /**
      * Constructor.
      *
-     * @param AIClient|null $ai_client The AI client instance. If null, creates a new one.
+     * @param AIClient|null $ai_client  The AI client instance. If null, creates a new one.
+     * @param object|null   $piiScanner PII scanner with scan() method. Defaults to PIIDetector.
      */
-    public function __construct(?AIClient $ai_client = null)
+    public function __construct(?AIClient $ai_client = null, ?object $piiScanner = null)
     {
         $this->ai_client = $ai_client ?? new AIClient();
+        $this->piiScanner = $piiScanner ?? new PIIDetector();
+    }
+
+    /**
+     * Inject a PromptManager for versioned prompt delivery.
+     *
+     * @param PromptManager $manager The prompt manager instance.
+     */
+    public function setPromptManager(PromptManager $manager): void
+    {
+        $this->prompt_manager = $manager;
     }
 
     /**
@@ -131,6 +105,7 @@ PROMPT;
             return [];
         }
 
+        $model = $model ?? ModelRouter::select('extraction');
         $system_prompt = $this->get_system_prompt();
 
         $response = $this->ai_client->extract($content, $system_prompt, $model);
@@ -175,8 +150,18 @@ PROMPT;
             }
         }
 
+        // Scan for PII in extracted entities
+        foreach ($validated_entities as &$entity) {
+            $scan = $this->piiScanner->scan(($entity['name'] ?? '') . ' ' . ($entity['context'] ?? ''));
+            if ($scan->hasPii) {
+                $entity['pii_flagged'] = true;
+                $entity['pii_findings'] = $scan->findings;
+            }
+        }
+        unset($entity);
+
         // Limit number of entities
-        return array_slice($validated_entities, 0, self::MAX_ENTITIES_PER_POST);
+        return array_slice($validated_entities, 0, Config::MAX_ENTITIES_PER_POST);
     }
 
     /**
@@ -212,7 +197,7 @@ PROMPT;
         $confidence = (float) $confidence;
 
         // Reject entities below minimum confidence threshold
-        if ($confidence < self::MIN_CONFIDENCE_THRESHOLD) {
+        if ($confidence < Config::CONFIDENCE_LOW) {
             return null;
         }
 
@@ -261,7 +246,7 @@ PROMPT;
         $type = strtoupper(trim($type));
 
         // Direct match
-        if (in_array($type, self::ALLOWED_TYPES, true)) {
+        if (in_array($type, Config::VALID_TYPES, true)) {
             return $type;
         }
 
@@ -291,8 +276,6 @@ PROMPT;
             'MEETING' => 'EVENT',
             'IDEA' => 'CONCEPT',
             'THEORY' => 'CONCEPT',
-            'TECHNOLOGY' => 'CONCEPT',
-            'BRAND' => 'PRODUCT',
             'ITEM' => 'PRODUCT',
         ];
 
@@ -320,11 +303,11 @@ PROMPT;
         }
 
         // Truncate to max length
-        if (mb_strlen($context) > self::MAX_CONTEXT_LENGTH) {
-            $context = mb_substr($context, 0, self::MAX_CONTEXT_LENGTH - 3) . '...';
+if (mb_strlen($context) > Config::MAX_CONTEXT_LENGTH) {
+                $context = mb_substr($context, 0, Config::MAX_CONTEXT_LENGTH - 3) . '...';
         }
 
-        return wp_kses_post($context);
+        return sanitize_text_field($context);
     }
 
     /**
@@ -366,11 +349,17 @@ PROMPT;
         // Combine title and content
         $content = $post->post_title . "\n\n" . $post->post_content;
 
-        // Security/Cost: Hard limit on context length (approx 50k chars is safe for most models, but let's be conservative)
-        if (mb_strlen($content) > 20000) {
-            // Log a warning if possible, then truncate. 
-            // In a real implementation we would log this truncation.
-            $content = mb_substr($content, 0, 20000);
+        // Use 80% of AIClient::MAX_INPUT_CHARS to leave room for system prompt and response tokens
+        $maxContentLength = (int) floor(AIClient::MAX_INPUT_CHARS * 0.8);
+        if (mb_strlen($content) > $maxContentLength) {
+            $original_length = mb_strlen($content);
+            $content = mb_substr($content, 0, $maxContentLength);
+            error_log(sprintf(
+                'Vibe AI: Content truncated. Original: %d chars, Truncated: %d chars, Lost: %d chars',
+                $original_length,
+                $maxContentLength,
+                $original_length - $maxContentLength
+            ));
         }
 
         // Strip shortcodes
@@ -398,7 +387,7 @@ PROMPT;
      */
     private function get_system_prompt(): string
     {
-        $prompt = self::SYSTEM_PROMPT;
+        $prompt = ($this->prompt_manager ?? new PromptManager())->getPrompt('extraction');
 
         /**
          * Filter the system prompt used for entity extraction.
@@ -467,7 +456,7 @@ PROMPT;
      */
     public function get_min_confidence_threshold(): float
     {
-        return self::MIN_CONFIDENCE_THRESHOLD;
+        return Config::CONFIDENCE_LOW;
     }
 
     /**
@@ -477,6 +466,6 @@ PROMPT;
      */
     public function get_allowed_types(): array
     {
-        return self::ALLOWED_TYPES;
+        return Config::VALID_TYPES;
     }
 }

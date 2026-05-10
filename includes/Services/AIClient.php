@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Vibe\AIIndex\Services;
 
+use Vibe\AIIndex\Config;
 use Vibe\AIIndex\Services\Exceptions\RateLimitException;
 
 /**
@@ -21,7 +22,7 @@ class AIClient
     /**
      * Maximum input characters accepted for extraction.
      */
-    private const MAX_INPUT_CHARS = 120000;
+    public const MAX_INPUT_CHARS = 120000;
 
     /**
      * Timeout in seconds for API requests.
@@ -49,44 +50,32 @@ class AIClient
     private const API_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
     /**
-     * Default model to use for extraction (Claude Opus 4.5 via OpenRouter).
+     * Estimate token cost for a request.
+     *
+     * @param string $content The input content.
+     * @param string $model   The model identifier.
+     * @return array{tokens: int, estimated_cost_usd: float} Cost estimate.
      */
-    private const DEFAULT_MODEL = 'anthropic/claude-opus-4.5';
+    public static function estimateCost(string $content, string $model = ''): array
+    {
+        $model = $model ?: Config::DEFAULT_MODEL;
+        $char_count = strlen($content);
+        // Rough estimate: 1 token ≈ 4 characters
+        $estimated_tokens = (int) ceil($char_count / 4);
+        // Cost per 1M tokens (approximate OpenRouter pricing, input only)
+        $cost_per_million = match (true) {
+            str_contains($model, 'gpt-4.1-mini') => 0.40,
+            str_contains($model, 'sonnet') => 3.0,
+            str_contains($model, 'opus') => 15.0,
+            default => 5.0,
+        };
+        $estimated_cost = ($estimated_tokens / 1_000_000) * $cost_per_million;
 
-    /**
-     * Rate limiting: requests per minute.
-     */
-    private const REQUESTS_PER_MINUTE = 60;
-
-    /**
-     * Rate limiting: tokens per minute.
-     */
-    private const TOKENS_PER_MINUTE = 100000;
-
-    /**
-     * Maximum retry attempts.
-     */
-    private const MAX_RETRIES = 3;
-
-    /**
-     * Backoff multiplier for retries.
-     */
-    private const BACKOFF_MULTIPLIER = 2;
-
-    /**
-     * Base delay in seconds for exponential backoff.
-     */
-    private const BASE_DELAY_SECONDS = 5;
-
-    /**
-     * Maximum tokens for response.
-     */
-    private const MAX_TOKENS = 4096;
-
-    /**
-     * Temperature for AI responses.
-     */
-    private const TEMPERATURE = 0.1;
+        return [
+            'tokens' => $estimated_tokens,
+            'estimated_cost_usd' => round($estimated_cost, 6),
+        ];
+    }
 
     /**
      * The API key for OpenRouter.
@@ -135,7 +124,7 @@ class AIClient
      *
      * @param string      $content The content to extract entities from.
      * @param string      $system_prompt The system prompt for the AI.
-     * @param string|null $model   The model to use (defaults to claude-3.5-sonnet).
+     * @param string|null $model   The model to use (defaults to Config::DEFAULT_MODEL).
      *
      * @return array<string, mixed> The parsed AI response containing entities.
      *
@@ -152,10 +141,10 @@ class AIClient
             throw new \InvalidArgumentException('Content too large for extraction request');
         }
 
-        $model = $model ?? self::DEFAULT_MODEL;
+        $model = $model ?? Config::DEFAULT_MODEL;
         $last_exception = null;
 
-        for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
+        for ($attempt = 1; $attempt <= Config::RETRY_ATTEMPTS; $attempt++) {
             try {
                 $this->guardCircuit();
                 $this->checkRateLimit();
@@ -169,7 +158,7 @@ class AIClient
                 $last_exception = $e;
                 $this->recordCircuitFailure($e->getMessage());
 
-                if ($attempt < self::MAX_RETRIES) {
+                if ($attempt < Config::RETRY_ATTEMPTS) {
                     $delay = $this->calculateBackoffDelay($attempt);
                     $this->sleep($delay);
                 }
@@ -177,7 +166,7 @@ class AIClient
                 $last_exception = $e;
                 $this->recordCircuitFailure($e->getMessage());
 
-                if ($attempt < self::MAX_RETRIES) {
+                if ($attempt < Config::RETRY_ATTEMPTS) {
                     $delay = $this->calculateBackoffDelay($attempt);
                     $this->sleep($delay);
                 }
@@ -191,7 +180,7 @@ class AIClient
         throw new \RuntimeException(
             sprintf(
                 'Entity extraction failed after %d attempts: %s',
-                self::MAX_RETRIES,
+                Config::RETRY_ATTEMPTS,
                 $last_exception ? $last_exception->getMessage() : 'Unknown error'
             ),
             0,
@@ -225,8 +214,8 @@ class AIClient
                     'content' => $content,
                 ],
             ],
-            'max_tokens' => self::MAX_TOKENS,
-            'temperature' => self::TEMPERATURE,
+            'max_tokens' => Config::MAX_TOKENS,
+            'temperature' => Config::TEMPERATURE,
             'response_format' => [
                 'type' => 'json_object',
             ],
@@ -244,6 +233,16 @@ class AIClient
             'timeout' => self::REQUEST_TIMEOUT,
             'sslverify' => true,
         ];
+
+        $estimate = self::estimateCost($content, $model);
+        if ($estimate['estimated_cost_usd'] > 0.50) {
+            error_log(sprintf(
+                'Vibe AI: Expensive extraction estimated. Model: %s, Tokens: %d, Cost: $%.4f',
+                $model,
+                $estimate['tokens'],
+                $estimate['estimated_cost_usd']
+            ));
+        }
 
         $response = wp_remote_post(self::API_ENDPOINT, $args);
 
@@ -329,7 +328,7 @@ class AIClient
             return;
         }
 
-        if ($this->request_count >= self::REQUESTS_PER_MINUTE) {
+        if ($this->request_count >= Config::REQUESTS_PER_MINUTE) {
             $wait_time = 60 - ($current_time - $this->window_start);
             throw new RateLimitException(
                 'Local rate limit reached. Waiting for window reset.',
@@ -359,7 +358,7 @@ class AIClient
      */
     private function calculateBackoffDelay(int $attempt): int
     {
-        return (int) (self::BASE_DELAY_SECONDS * pow(self::BACKOFF_MULTIPLIER, $attempt - 1));
+        return (int) (Config::BASE_DELAY_SECONDS * pow(Config::BACKOFF_MULTIPLIER, $attempt - 1));
     }
 
     /**
