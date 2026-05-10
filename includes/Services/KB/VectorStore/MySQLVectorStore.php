@@ -210,45 +210,26 @@ class MySQLVectorStore implements VectorStoreInterface
 
         $startTime = microtime(true);
 
-        // Apply filters to get candidate chunk IDs
+        // Pre-filter candidate chunk IDs by status, post_type, and any explicit filters
         $candidateChunkIds = $this->applyFilters($filters);
 
-        // If filters produced no candidates, return empty
-        if (!empty($filters) && empty($candidateChunkIds)) {
-            $this->logger->debug('Search returned no candidates after filtering', [
+        // If pre-filtering produced no candidates, return empty early
+        if (empty($candidateChunkIds)) {
+            $this->logger->debug('Search returned no candidates after pre-filtering', [
                 'filters' => array_keys($filters),
             ]);
             return [];
         }
 
-        // Build query to fetch vectors
+        // Build query to fetch vectors for candidate chunks only
+        $placeholders = implode(',', array_fill(0, count($candidateChunkIds), '%d'));
         $query = "SELECT v.chunk_id, v.vector_payload, v.model, c.doc_id
                   FROM {$this->vectorsTable} v
-                  JOIN {$this->chunksTable} c ON v.chunk_id = c.id";
-
-        $params = [];
-
-        if (!empty($candidateChunkIds)) {
-            // Respect max scan limit
-            $scanLimit = Config::KB_MAX_SCAN_VECTORS;
-            if (count($candidateChunkIds) > $scanLimit) {
-                $candidateChunkIds = array_slice($candidateChunkIds, 0, $scanLimit);
-            }
-
-            $placeholders = implode(',', array_fill(0, count($candidateChunkIds), '%d'));
-            $query .= " WHERE v.chunk_id IN ({$placeholders})";
-            $params = $candidateChunkIds;
-        } else {
-            // No filters, but still respect scan limit
-            $query .= sprintf(' LIMIT %d', Config::KB_MAX_SCAN_VECTORS);
-        }
+                  JOIN {$this->chunksTable} c ON v.chunk_id = c.id
+                  WHERE v.chunk_id IN ({$placeholders})";
 
         // Execute query
-        if (!empty($params)) {
-            $sql = $this->wpdb->prepare($query, ...$params);
-        } else {
-            $sql = $query;
-        }
+        $sql = $this->wpdb->prepare($query, ...$candidateChunkIds);
 
         $rows = $this->wpdb->get_results($sql, ARRAY_A);
 
@@ -311,12 +292,7 @@ class MySQLVectorStore implements VectorStoreInterface
      */
     public function count(array $filters = []): int
     {
-        if (empty($filters)) {
-            $count = $this->wpdb->get_var("SELECT COUNT(*) FROM {$this->vectorsTable}");
-            return (int) $count;
-        }
-
-        // Apply filters to get candidate chunk IDs
+        // Apply filters (includes default status + post_type pre-filtering)
         $candidateChunkIds = $this->applyFilters($filters);
 
         if (empty($candidateChunkIds)) {
@@ -448,7 +424,14 @@ class MySQLVectorStore implements VectorStoreInterface
     }
 
     /**
-     * Pre-filter chunk IDs by post_type, taxonomy, date, etc.
+     * Pre-filter chunk IDs by post_type, document status, date range, etc.
+     *
+     * When no explicit filters are provided, applies default pre-filtering:
+     * - Only indexed documents (d.status = 'indexed')
+     * - Only configured post types (Config::DEFAULT_POST_TYPES)
+     *
+     * This reduces the vector scan from all vectors to only matching ones,
+     * significantly improving query performance.
      *
      * @param array<string, mixed> $filters Filter criteria
      *
@@ -456,23 +439,26 @@ class MySQLVectorStore implements VectorStoreInterface
      */
     private function applyFilters(array $filters): array
     {
-        if (empty($filters)) {
-            return [];
-        }
-
         $query = "SELECT c.id FROM {$this->chunksTable} c
                   JOIN {$this->docsTable} d ON c.doc_id = d.id
                   WHERE 1=1";
 
         $params = [];
 
-        // Filter by post_type
+        // Default pre-filter: only indexed documents
+        $status = !empty($filters['status']) ? $filters['status'] : Config::KB_STATUS_INDEXED;
+        $query .= ' AND d.status = %s';
+        $params[] = $status;
+
+        // Default pre-filter: only configured post types
         if (!empty($filters['post_type'])) {
             $postTypes = (array) $filters['post_type'];
-            $placeholders = implode(',', array_fill(0, count($postTypes), '%s'));
-            $query .= " AND d.post_type IN ({$placeholders})";
-            $params = array_merge($params, $postTypes);
+        } else {
+            $postTypes = Config::DEFAULT_POST_TYPES;
         }
+        $placeholders = implode(',', array_fill(0, count($postTypes), '%s'));
+        $query .= " AND d.post_type IN ({$placeholders})";
+        $params = array_merge($params, $postTypes);
 
         // Filter by post_id
         if (!empty($filters['post_id'])) {
@@ -490,13 +476,7 @@ class MySQLVectorStore implements VectorStoreInterface
             $params = array_merge($params, $docIds);
         }
 
-        // Filter by status
-        if (!empty($filters['status'])) {
-            $query .= ' AND d.status = %s';
-            $params[] = $filters['status'];
-        }
-
-        // Filter by date range
+        // Filter by date range (comment parameter, ready for future use)
         if (!empty($filters['date_after'])) {
             $query .= ' AND d.created_at >= %s';
             $params[] = $filters['date_after'];
@@ -516,11 +496,7 @@ class MySQLVectorStore implements VectorStoreInterface
         $query .= sprintf(' LIMIT %d', Config::KB_MAX_SCAN_VECTORS);
 
         // Execute query
-        if (!empty($params)) {
-            $sql = $this->wpdb->prepare($query, ...$params);
-        } else {
-            $sql = $query;
-        }
+        $sql = $this->wpdb->prepare($query, ...$params);
 
         $chunkIds = $this->wpdb->get_col($sql);
 

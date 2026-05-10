@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vibe\AIIndex\Repositories\KB;
 
 use Vibe\AIIndex\Config;
+use Vibe\AIIndex\Services\KB\SimilaritySearch;
 
 /**
  * Repository for wp_ai_kb_docs table operations.
@@ -732,6 +733,7 @@ class DocumentRepository {
 
         if ($document !== null) {
             $this->setStatus((int) $document->id, Config::KB_STATUS_EXCLUDED);
+            SimilaritySearch::invalidateSearchCache();
             return true;
         }
 
@@ -750,6 +752,7 @@ class DocumentRepository {
             'chunk_count'  => 0,
         ]);
 
+        SimilaritySearch::invalidateSearchCache();
         return true;
     }
 
@@ -766,6 +769,7 @@ class DocumentRepository {
 
         if ($document !== null) {
             $this->setStatus((int) $document->id, Config::KB_STATUS_PENDING);
+            SimilaritySearch::invalidateSearchCache();
             return true;
         }
 
@@ -784,6 +788,7 @@ class DocumentRepository {
             'chunk_count'  => 0,
         ]);
 
+        SimilaritySearch::invalidateSearchCache();
         return true;
     }
 

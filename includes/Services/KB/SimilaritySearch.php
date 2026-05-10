@@ -107,6 +107,23 @@ class SimilaritySearch
             // Generate embedding for the query
             $queryVector = $this->embeddingClient->embedSingle($query);
 
+            // Check cache before performing search
+            $cacheKey = 'vibe_ai_kb_search_' . md5(serialize([
+                'vector_hash' => md5(serialize($queryVector)),
+                'top_k' => $topK,
+                'filters' => $filters,
+            ]));
+            $cached = get_transient($cacheKey);
+            if ($cached !== false) {
+                $duration = (int) ((microtime(true) - $startTime) * 1000);
+                $this->logger->debug('Similarity search cache hit', [
+                    'cache_key' => $cacheKey,
+                    'results_count' => count($cached),
+                    'duration_ms' => $duration,
+                ]);
+                return $cached;
+            }
+
             // Search for similar vectors
             $vectorResults = $this->vectorStore->search($queryVector, $topK, $filters);
 
@@ -117,6 +134,9 @@ class SimilaritySearch
 
             // Enrich results with document metadata
             $enrichedResults = $this->enrichResults($vectorResults);
+
+            // Cache results for 1 hour
+            set_transient($cacheKey, $enrichedResults, HOUR_IN_SECONDS);
 
             $duration = (int) ((microtime(true) - $startTime) * 1000);
 
@@ -373,5 +393,31 @@ class SimilaritySearch
             'total_vectors' => $totalVectors,
             'indexed_post_types' => $indexedPostTypes,
         ];
+    }
+
+    /**
+     * Invalidate all cached search results.
+     *
+     * Called when KB documents are reindexed, status changes,
+     * or settings are updated to ensure stale results are not served.
+     *
+     * @return int Number of cache entries deleted
+     */
+    public static function invalidateSearchCache(): int
+    {
+        global $wpdb;
+        $deleted = 0;
+
+        // Delete transient records
+        $deleted += (int) $wpdb->query(
+            "DELETE FROM {$wpdb->options} WHERE option_name LIKE '\_transient\_vibe\_ai\_kb\_search\_%'"
+        );
+
+        // Delete transient timeout records
+        $deleted += (int) $wpdb->query(
+            "DELETE FROM {$wpdb->options} WHERE option_name LIKE '\_transient\_timeout\_vibe\_ai\_kb\_search\_%'"
+        );
+
+        return $deleted;
     }
 }

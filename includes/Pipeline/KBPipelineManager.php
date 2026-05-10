@@ -13,6 +13,8 @@ use Vibe\AIIndex\Jobs\KB\CleanupJob;
 use Vibe\AIIndex\Repositories\KB\DocumentRepository;
 use Vibe\AIIndex\Repositories\KB\ChunkRepository;
 use Vibe\AIIndex\Repositories\KB\VectorRepository;
+use Vibe\AIIndex\Services\KB\SimilaritySearch;
+use Vibe\AIIndex\Services\ModelRouter;
 
 /**
  * KBPipelineManager: Orchestrates the KB indexing pipeline.
@@ -497,6 +499,9 @@ class KBPipelineManager {
             'progress' => $progress,
         ]);
 
+        // Invalidate search cache since indexed data has changed
+        SimilaritySearch::invalidateSearchCache();
+
         do_action('vibe_ai_kb_pipeline_completed', $stats);
     }
 
@@ -610,6 +615,10 @@ class KBPipelineManager {
         }
 
         $this->docRepo->deleteByPostId($postId);
+
+        // Invalidate search cache since data has been removed
+        SimilaritySearch::invalidateSearchCache();
+
         $this->log('info', 'Removed deleted post from Knowledge Base', ['post_id' => $postId]);
     }
 
@@ -867,6 +876,10 @@ class KBPipelineManager {
         }
 
         $hook = "vibe_ai_{$phase}";
+
+        // Inject the routed model for this phase
+        $args['model'] = ModelRouter::select($phase);
+
         $actionArgs = $this->getPhaseActionArgs($phase, $args);
 
         if (function_exists('as_next_scheduled_action')) {
